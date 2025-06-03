@@ -3,6 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
+
+	"tritontube/internal/storage"
 )
 
 func main() {
@@ -27,5 +30,7 @@ func main() {
 	fmt.Printf("Port: %d\n", *port)
 	fmt.Printf("Base Directory: %s\n", baseDir)
 
-	panic("Lab 8: not implemented")
+	if err := storage.StartServer(*host, *port, baseDir); err != nil {
+		log.Fatalf("Failed to start storage server: %v", err)
+	}
 }

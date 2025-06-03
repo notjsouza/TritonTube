@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"strings"
 	"tritontube/internal/web"
 )
 
@@ -78,6 +79,18 @@ func main() {
 	switch contentServiceType {
 	case "fs":
 		contentService = web.NewFSVideoContentService(contentServiceOptions)
+	case "nw":
+		parts := strings.Split(contentServiceOptions, ",")
+		if len(parts) < 2 {
+			return
+		}
+		adminAddr := parts[0]
+		storageAddr := parts[1:]
+		svc, err := web.NewNetworkVideoContentService(adminAddr, storageAddr)
+		if err != nil {
+			return
+		}
+		contentService = svc
 	default:
 		return
 	}

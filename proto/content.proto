@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package tritontube;
+
+option go_package = "internal/proto;proto";
+
+service VideoContent {
+  rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
+  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+}
+
+message WriteFileRequest {
+  string video_id = 1;
+  string filename = 2;
+  bytes data = 3;
+}
+
+message WriteFileResponse {
+  bool success = 1;
+}
+
+message ReadFileRequest {
+  string video_id = 1;
+  string filename = 2;
+}
+
+message ReadFileResponse {
+  bytes data = 1;
+}

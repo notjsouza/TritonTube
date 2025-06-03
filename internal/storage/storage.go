@@ -3,3 +3,53 @@
 package storage
 
 // Implement a network video content service (server)
+
+import (
+	"context"
+	"fmt"
+	"io/ioutil"
+	"net"
+	"os"
+	"path/filepath"
+
+	"tritontube/internal/proto"
+
+	"google.golang.org/grpc"
+)
+
+type Server struct {
+	proto.UnimplementedVideoContentServer
+	BaseDir string
+}
+
+func (s *Server) WriteFile(ctx context.Context, req *proto.WriteFileRequest) (*proto.WriteFileResponse, error) {
+	dir := filepath.Join(s.BaseDir, req.VideoId)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return &proto.WriteFileResponse{Success: false}, fmt.Errorf("failed to create directory: %v", err)
+	}
+	filePath := filepath.Join(dir, req.Filename)
+	if err := ioutil.WriteFile(filePath, req.Data, 0644); err != nil {
+		return &proto.WriteFileResponse{Success: false}, fmt.Errorf("failed to write file: %v", err)
+	}
+	return &proto.WriteFileResponse{Success: true}, nil
+}
+
+func (s *Server) ReadFile(ctx context.Context, req *proto.ReadFileRequest) (*proto.ReadFileResponse, error) {
+	filePath := filepath.Join(s.BaseDir, req.VideoId, req.Filename)
+	data, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return &proto.ReadFileResponse{}, fmt.Errorf("failed to read file: %v", err)
+	}
+	return &proto.ReadFileResponse{Data: data}, nil
+}
+
+func StartServer(host string, port int, baseDir string) error {
+	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		return fmt.Errorf("failed to listen: %v", err)
+	}
+	s := grpc.NewServer()
+	proto.RegisterVideoContentServer(s, &Server{BaseDir: baseDir})
+	fmt.Printf("Starting server on %s:%d\n", host, port)
+	return s.Serve(lis)
+}
