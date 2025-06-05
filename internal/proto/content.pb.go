@@ -225,7 +225,8 @@ var File_proto_content_proto protoreflect.FileDescriptor
 
 const file_proto_content_proto_rawDesc = "" +
 	"\n" +
-	"\x13proto/content.proto\x12\acontent\"]\n" +
+	"\x13proto/content.proto\x12\n" +
+	"tritontube\"]\n" +
 	"\x10WriteFileRequest\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12\x1a\n" +
 	"\bfilename\x18\x02 \x01(\tR\bfilename\x12\x12\n" +
@@ -236,10 +237,10 @@ const file_proto_content_proto_rawDesc = "" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12\x1a\n" +
 	"\bfilename\x18\x02 \x01(\tR\bfilename\"&\n" +
 	"\x10ReadFileResponse\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data2\x93\x01\n" +
-	"\fVideoContent\x12B\n" +
-	"\tWriteFile\x12\x19.content.WriteFileRequest\x1a\x1a.content.WriteFileResponse\x12?\n" +
-	"\bReadFile\x12\x18.content.ReadFileRequest\x1a\x19.content.ReadFileResponseB\x16Z\x14internal/proto;protob\x06proto3"
+	"\x04data\x18\x01 \x01(\fR\x04data2\x9f\x01\n" +
+	"\fVideoContent\x12H\n" +
+	"\tWriteFile\x12\x1c.tritontube.WriteFileRequest\x1a\x1d.tritontube.WriteFileResponse\x12E\n" +
+	"\bReadFile\x12\x1b.tritontube.ReadFileRequest\x1a\x1c.tritontube.ReadFileResponseB\x16Z\x14internal/proto;protob\x06proto3"
 
 var (
 	file_proto_content_proto_rawDescOnce sync.Once
@@ -255,16 +256,16 @@ func file_proto_content_proto_rawDescGZIP() []byte {
 
 var file_proto_content_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_proto_content_proto_goTypes = []any{
-	(*WriteFileRequest)(nil),  // 0: content.WriteFileRequest
-	(*WriteFileResponse)(nil), // 1: content.WriteFileResponse
-	(*ReadFileRequest)(nil),   // 2: content.ReadFileRequest
-	(*ReadFileResponse)(nil),  // 3: content.ReadFileResponse
+	(*WriteFileRequest)(nil),  // 0: tritontube.WriteFileRequest
+	(*WriteFileResponse)(nil), // 1: tritontube.WriteFileResponse
+	(*ReadFileRequest)(nil),   // 2: tritontube.ReadFileRequest
+	(*ReadFileResponse)(nil),  // 3: tritontube.ReadFileResponse
 }
 var file_proto_content_proto_depIdxs = []int32{
-	0, // 0: content.VideoContent.WriteFile:input_type -> content.WriteFileRequest
-	2, // 1: content.VideoContent.ReadFile:input_type -> content.ReadFileRequest
-	1, // 2: content.VideoContent.WriteFile:output_type -> content.WriteFileResponse
-	3, // 3: content.VideoContent.ReadFile:output_type -> content.ReadFileResponse
+	0, // 0: tritontube.VideoContent.WriteFile:input_type -> tritontube.WriteFileRequest
+	2, // 1: tritontube.VideoContent.ReadFile:input_type -> tritontube.ReadFileRequest
+	1, // 2: tritontube.VideoContent.WriteFile:output_type -> tritontube.WriteFileResponse
+	3, // 3: tritontube.VideoContent.ReadFile:output_type -> tritontube.ReadFileResponse
 	2, // [2:4] is the sub-list for method output_type
 	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name

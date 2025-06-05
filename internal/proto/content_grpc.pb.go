@@ -19,8 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	VideoContent_WriteFile_FullMethodName = "/content.VideoContent/WriteFile"
-	VideoContent_ReadFile_FullMethodName  = "/content.VideoContent/ReadFile"
+	VideoContent_WriteFile_FullMethodName = "/tritontube.VideoContent/WriteFile"
+	VideoContent_ReadFile_FullMethodName  = "/tritontube.VideoContent/ReadFile"
 )
 
 // VideoContentClient is the client API for VideoContent service.
@@ -142,7 +142,7 @@ func _VideoContent_ReadFile_Handler(srv interface{}, ctx context.Context, dec fu
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var VideoContent_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "content.VideoContent",
+	ServiceName: "tritontube.VideoContent",
 	HandlerType: (*VideoContentServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"tritontube/internal/proto"
 	"tritontube/internal/web"
+
+	"google.golang.org/grpc"
 )
 
 // printUsage prints the usage information for the application
@@ -81,16 +84,38 @@ func main() {
 		contentService = web.NewFSVideoContentService(contentServiceOptions)
 	case "nw":
 		parts := strings.Split(contentServiceOptions, ",")
+
 		if len(parts) < 2 {
 			return
 		}
+
 		adminAddr := parts[0]
-		storageAddr := parts[1:]
-		svc, err := web.NewNetworkVideoContentService(adminAddr, storageAddr)
+		storageAddrs := parts[1:]
+		svc, err := web.NewNetworkVideoContentService(storageAddrs)
+
 		if err != nil {
 			return
 		}
+
 		contentService = svc
+
+		go func() {
+			lis, err := net.Listen("tcp", adminAddr)
+
+			if err != nil {
+				fmt.Println("Error starting admin listener:", err)
+				return
+			}
+
+			grpcServer := grpc.NewServer()
+			proto.RegisterVideoContentAdminServiceServer(grpcServer, svc)
+			fmt.Println("Admin gREC server listening at", adminAddr)
+
+			if err := grpcServer.Serve(lis); err != nil {
+				fmt.Println("Error serving admin gREC server:", err)
+				return
+			}
+		}()
 	default:
 		return
 	}
@@ -99,15 +124,16 @@ func main() {
 	server := web.NewServer(metadataService, contentService)
 	listenAddr := fmt.Sprintf("%s:%d", *host, *port)
 	lis, err := net.Listen("tcp", listenAddr)
+
 	if err != nil {
 		fmt.Println("Error starting listener:", err)
 		return
+
 	}
 	defer lis.Close()
 
 	fmt.Println("Starting web server on", listenAddr)
-	err = server.Start(lis)
-	if err != nil {
+	if err := server.Start(lis); err != nil {
 		fmt.Println("Error starting server:", err)
 		return
 	}

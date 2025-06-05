@@ -4,7 +4,6 @@ package web
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 )
@@ -28,7 +27,7 @@ func (fs *FSVideoContentService) Write(videoId string, filename string, data []b
 	}
 
 	filePath := filepath.Join(videoDir, filename)
-	if err := ioutil.WriteFile(filePath, data, 0644); err != nil {
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write video file: %w", err)
 	}
 
@@ -37,7 +36,7 @@ func (fs *FSVideoContentService) Write(videoId string, filename string, data []b
 
 func (fs *FSVideoContentService) Read(videoId string, filename string) ([]byte, error) {
 	fullPath := filepath.Join(fs.baseDir, videoId, filename)
-	data, err := ioutil.ReadFile(fullPath)
+	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
