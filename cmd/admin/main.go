@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 	"tritontube/internal/proto"
 
 	"google.golang.org/grpc"
@@ -62,8 +61,7 @@ func printUsageAndExit() {
 }
 
 func addNode(client proto.VideoContentAdminServiceClient, nodeAddr string) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	ctx := context.Background()
 
 	response, err := client.AddNode(ctx, &proto.AddNodeRequest{
 		NodeAddress: nodeAddr,
@@ -77,8 +75,7 @@ func addNode(client proto.VideoContentAdminServiceClient, nodeAddr string) {
 }
 
 func removeNode(client proto.VideoContentAdminServiceClient, nodeAddr string) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	ctx := context.Background()
 
 	response, err := client.RemoveNode(ctx, &proto.RemoveNodeRequest{
 		NodeAddress: nodeAddr,
@@ -92,8 +89,7 @@ func removeNode(client proto.VideoContentAdminServiceClient, nodeAddr string) {
 }
 
 func listNodes(client proto.VideoContentAdminServiceClient) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	ctx := context.Background()
 
 	response, err := client.ListNodes(ctx, &proto.ListNodesRequest{})
 	if err != nil {

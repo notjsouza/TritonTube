@@ -63,8 +63,6 @@ func NewNetworkVideoContentService(nodeAddrs []string) (*NetworkVideoContentServ
 func (n *NetworkVideoContentService) Write(videoId, filename string, data []byte) error {
 	key := fmt.Sprintf("%s/%s", videoId, filename)
 	nodeID := n.getNodeForKey(key)
-	fmt.Printf("[Write] Routing file %s to node %s\n", key, nodeID)
-
 	client := n.clients[nodeID]
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -77,7 +75,6 @@ func (n *NetworkVideoContentService) Write(videoId, filename string, data []byte
 
 	_, err := client.WriteFile(ctx, req)
 	if err != nil {
-		fmt.Printf("[Write] Error writing file %s to node %s: %v\n", key, nodeID, err)
 		return err
 	}
 
@@ -92,7 +89,6 @@ func (n *NetworkVideoContentService) Write(videoId, filename string, data []byte
 	}
 	if !found {
 		n.fileRegistry[videoId] = append(n.fileRegistry[videoId], filename)
-		fmt.Printf("[Write] Registered file %s for video %s\n", filename, videoId)
 	}
 	return nil
 }
@@ -100,8 +96,6 @@ func (n *NetworkVideoContentService) Write(videoId, filename string, data []byte
 func (n *NetworkVideoContentService) Read(videoId, filename string) ([]byte, error) {
 	key := fmt.Sprintf("%s/%s", videoId, filename)
 	nodeID := n.getNodeForKey(key)
-	fmt.Printf("[Read] Routing file %s to node %s\n", key, nodeID)
-
 	client := n.clients[nodeID]
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -113,11 +107,9 @@ func (n *NetworkVideoContentService) Read(videoId, filename string) ([]byte, err
 
 	res, err := client.ReadFile(ctx, req)
 	if err != nil {
-		fmt.Printf("[Read] Error reading file %s from node %s: %v\n", key, nodeID, err)
 		return nil, err
 	}
 
-	fmt.Printf("[Read] Successfully read file %s from node %s (%d bytes)\n", key, nodeID, len(res.Data))
 	return res.Data, nil
 }
 
@@ -137,41 +129,44 @@ func (n *NetworkVideoContentService) getNodeForKey(key string) string {
 	return n.nodeMap[n.nodeHashes[index]]
 }
 
+func (n *NetworkVideoContentService) getNodeAddRemove(key string) string {
+	hash := hashStringToUint64(key)
+	index := sort.Search(len(n.nodeHashes), func(i int) bool {
+		return n.nodeHashes[i] >= hash
+	})
+
+	if index == len(n.nodeHashes) {
+		index = 0
+	}
+
+	return n.nodeMap[n.nodeHashes[index]]
+}
+
 func (n *NetworkVideoContentService) AddNode(ctx context.Context, req *proto.AddNodeRequest) (*proto.AddNodeResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-
 	node := req.NodeAddress
-	fmt.Printf("[AddNode] Adding node: %s\n", node)
-
-	// Connect to the new node
 	conn, err := grpc.Dial(node, grpc.WithInsecure())
+
 	if err != nil {
 		return nil, fmt.Errorf("[AddNode] failed to connect to new node %s: %v", node, err)
 	}
-	n.clients[node] = proto.NewVideoContentClient(conn)
 
-	// Update consistent hash ring
+	n.clients[node] = proto.NewVideoContentClient(conn)
 	hash := hashStringToUint64(node)
 	n.nodeMap[hash] = node
 	n.nodeHashes = append(n.nodeHashes, hash)
 	sort.Slice(n.nodeHashes, func(i, j int) bool { return n.nodeHashes[i] < n.nodeHashes[j] })
 	n.nodes = append(n.nodes, node)
-
 	migrated := 0
 
-	// Reassign any file whose new node is different
 	for videoId, filenames := range n.fileRegistry {
 		for _, filename := range filenames {
 			key := fmt.Sprintf("%s/%s", videoId, filename)
-			newNode := n.getNodeForKey(key)
+			newNode := n.getNodeAddRemove(key)
 			oldNode := n.findNodeBeforeAdding(node, key)
 
-			fmt.Printf("[AddNode] Checking file %s: oldNode=%s, newNode=%s\n", key, oldNode, newNode)
-
 			if newNode != oldNode {
-				fmt.Printf("[AddNode] Migrating %s from %s to %s\n", key, oldNode, newNode)
-
 				ctxRead, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 				data, err := n.clients[oldNode].ReadFile(ctxRead, &proto.ReadFileRequest{
 					VideoId:  videoId,
@@ -179,7 +174,6 @@ func (n *NetworkVideoContentService) AddNode(ctx context.Context, req *proto.Add
 				})
 				cancelRead()
 				if err != nil {
-					fmt.Printf("[AddNode] Failed to read %s from old node %s: %v\n", key, oldNode, err)
 					continue
 				}
 
@@ -190,8 +184,8 @@ func (n *NetworkVideoContentService) AddNode(ctx context.Context, req *proto.Add
 					Data:     data.Data,
 				})
 				cancelWrite()
+
 				if err != nil {
-					fmt.Printf("[AddNode] Failed to write %s to new node %s: %v\n", key, newNode, err)
 					continue
 				}
 
@@ -200,7 +194,6 @@ func (n *NetworkVideoContentService) AddNode(ctx context.Context, req *proto.Add
 		}
 	}
 
-	fmt.Printf("[AddNode] Migration complete. %d files moved to node %s\n", migrated, node)
 	return &proto.AddNodeResponse{MigratedFileCount: int32(migrated)}, nil
 }
 
@@ -231,15 +224,10 @@ func (n *NetworkVideoContentService) findNodeBeforeAdding(addedNode string, key 
 func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.RemoveNodeRequest) (*proto.RemoveNodeResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-
 	node := req.NodeAddress
-	fmt.Printf("[RemoveNode] Removing node: %s\n", node)
 	removedHash := hashStringToUint64(node)
-
-	delete(n.clients, node)
-	delete(n.nodeMap, removedHash)
-
 	newHashes := make([]uint64, 0, len(n.nodeHashes))
+
 	for _, h := range n.nodeHashes {
 		if h != removedHash {
 			newHashes = append(newHashes, h)
@@ -253,23 +241,17 @@ func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.
 			newNodes = append(newNodes, nAddr)
 		}
 	}
+
 	n.nodes = newNodes
-
 	migrated := 0
-
-	// Migrate files that were stored on the removed node
 	for videoId, filenames := range n.fileRegistry {
 		for _, filename := range filenames {
 			key := fmt.Sprintf("%s/%s", videoId, filename)
 			oldNode := node
-			newNode := n.getNodeForKey(key)
-
+			newNode := n.getNodeAddRemove(key)
 			if newNode == oldNode {
-				fmt.Printf("[RemoveNode] WARNING: file %s would be mapped back to removed node %s, skipping\n", key, oldNode)
 				continue
 			}
-
-			fmt.Printf("[RemoveNode] Migrating %s from %s to %s\n", key, oldNode, newNode)
 
 			ctxRead, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 			data, err := n.clients[oldNode].ReadFile(ctxRead, &proto.ReadFileRequest{
@@ -278,7 +260,6 @@ func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.
 			})
 			cancelRead()
 			if err != nil {
-				fmt.Printf("[RemoveNode] Failed to read %s from node %s: %v\n", key, oldNode, err)
 				continue
 			}
 
@@ -288,9 +269,9 @@ func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.
 				Filename: filename,
 				Data:     data.Data,
 			})
+
 			cancelWrite()
 			if err != nil {
-				fmt.Printf("[RemoveNode] Failed to write %s to node %s: %v\n", key, newNode, err)
 				continue
 			}
 
@@ -298,7 +279,9 @@ func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.
 		}
 	}
 
-	fmt.Printf("[RemoveNode] Migration complete. %d files moved away from node %s\n", migrated, node)
+	delete(n.clients, node)
+	delete(n.nodeMap, removedHash)
+
 	return &proto.RemoveNodeResponse{MigratedFileCount: int32(migrated)}, nil
 }
 
