@@ -7,7 +7,6 @@ package storage
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -28,7 +27,7 @@ func (s *Server) WriteFile(ctx context.Context, req *proto.WriteFileRequest) (*p
 		return &proto.WriteFileResponse{Success: false}, fmt.Errorf("failed to create directory: %v", err)
 	}
 	filePath := filepath.Join(dir, req.Filename)
-	if err := ioutil.WriteFile(filePath, req.Data, 0644); err != nil {
+	if err := os.WriteFile(filePath, req.Data, 0644); err != nil {
 		return &proto.WriteFileResponse{Success: false}, fmt.Errorf("failed to write file: %v", err)
 	}
 	return &proto.WriteFileResponse{Success: true}, nil
@@ -36,7 +35,7 @@ func (s *Server) WriteFile(ctx context.Context, req *proto.WriteFileRequest) (*p
 
 func (s *Server) ReadFile(ctx context.Context, req *proto.ReadFileRequest) (*proto.ReadFileResponse, error) {
 	filePath := filepath.Join(s.BaseDir, req.VideoId, req.Filename)
-	data, err := ioutil.ReadFile(filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return &proto.ReadFileResponse{}, fmt.Errorf("failed to read file: %v", err)
 	}
