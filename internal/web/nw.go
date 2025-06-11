@@ -36,7 +36,16 @@ func NewNetworkVideoContentService(nodeAddrs []string) (*NetworkVideoContentServ
 	nodeHashes := make([]uint64, 0, len(nodeAddrs))
 
 	for _, addr := range nodeAddrs {
-		conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock(), grpc.WithTimeout(2*time.Second))
+		conn, err := grpc.Dial(
+			addr,
+			grpc.WithInsecure(),
+			grpc.WithBlock(),
+			grpc.WithTimeout(5*time.Second),
+			grpc.WithDefaultCallOptions(
+				grpc.MaxCallSendMsgSize(32*1024*1024),
+				grpc.MaxCallRecvMsgSize(32*1024*1024),
+			),
+		)
 
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to node %s: %v", addr, err)
@@ -64,7 +73,7 @@ func (n *NetworkVideoContentService) Write(videoId, filename string, data []byte
 	key := fmt.Sprintf("%s/%s", videoId, filename)
 	nodeID := n.getNodeForKey(key)
 	client := n.clients[nodeID]
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	req := &proto.WriteFileRequest{
@@ -97,7 +106,7 @@ func (n *NetworkVideoContentService) Read(videoId, filename string) ([]byte, err
 	key := fmt.Sprintf("%s/%s", videoId, filename)
 	nodeID := n.getNodeForKey(key)
 	client := n.clients[nodeID]
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	req := &proto.ReadFileRequest{
@@ -167,7 +176,7 @@ func (n *NetworkVideoContentService) AddNode(ctx context.Context, req *proto.Add
 			oldNode := n.findNodeBeforeAdding(node, key)
 
 			if newNode != oldNode {
-				ctxRead, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+				ctxRead, cancelRead := context.WithTimeout(context.Background(), 5*time.Second)
 				data, err := n.clients[oldNode].ReadFile(ctxRead, &proto.ReadFileRequest{
 					VideoId:  videoId,
 					Filename: filename,
@@ -177,7 +186,7 @@ func (n *NetworkVideoContentService) AddNode(ctx context.Context, req *proto.Add
 					continue
 				}
 
-				ctxWrite, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+				ctxWrite, cancelWrite := context.WithTimeout(context.Background(), 5*time.Second)
 				_, err = n.clients[newNode].WriteFile(ctxWrite, &proto.WriteFileRequest{
 					VideoId:  videoId,
 					Filename: filename,
@@ -226,8 +235,13 @@ func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.
 	defer n.mu.Unlock()
 	node := req.NodeAddress
 	removedHash := hashStringToUint64(node)
-	newHashes := make([]uint64, 0, len(n.nodeHashes))
 
+	oldClient, ok := n.clients[node]
+	if !ok {
+		return nil, fmt.Errorf("node %s not found", node)
+	}
+
+	newHashes := make([]uint64, 0, len(n.nodeHashes))
 	for _, h := range n.nodeHashes {
 		if h != removedHash {
 			newHashes = append(newHashes, h)
@@ -241,8 +255,11 @@ func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.
 			newNodes = append(newNodes, nAddr)
 		}
 	}
-
 	n.nodes = newNodes
+
+	delete(n.clients, node)
+	delete(n.nodeMap, removedHash)
+
 	migrated := 0
 	for videoId, filenames := range n.fileRegistry {
 		for _, filename := range filenames {
@@ -253,8 +270,8 @@ func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.
 				continue
 			}
 
-			ctxRead, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
-			data, err := n.clients[oldNode].ReadFile(ctxRead, &proto.ReadFileRequest{
+			ctxRead, cancelRead := context.WithTimeout(context.Background(), 5*time.Second)
+			data, err := oldClient.ReadFile(ctxRead, &proto.ReadFileRequest{
 				VideoId:  videoId,
 				Filename: filename,
 			})
@@ -263,7 +280,7 @@ func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.
 				continue
 			}
 
-			ctxWrite, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+			ctxWrite, cancelWrite := context.WithTimeout(context.Background(), 5*time.Second)
 			_, err = n.clients[newNode].WriteFile(ctxWrite, &proto.WriteFileRequest{
 				VideoId:  videoId,
 				Filename: filename,
@@ -278,9 +295,6 @@ func (n *NetworkVideoContentService) RemoveNode(ctx context.Context, req *proto.
 			migrated++
 		}
 	}
-
-	delete(n.clients, node)
-	delete(n.nodeMap, removedHash)
 
 	return &proto.RemoveNodeResponse{MigratedFileCount: int32(migrated)}, nil
 }

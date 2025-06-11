@@ -47,7 +47,10 @@ func StartServer(host string, port int, baseDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to listen: %v", err)
 	}
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.MaxRecvMsgSize(32*1024*1024),
+		grpc.MaxSendMsgSize(32*1024*1024),
+	)
 	proto.RegisterVideoContentServer(s, &Server{BaseDir: baseDir})
 	fmt.Printf("Starting server on %s:%d\n", host, port)
 	return s.Serve(lis)

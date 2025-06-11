@@ -165,12 +165,14 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 		data, err := os.ReadFile(filepath.Join(tempDir, f.Name()))
 		if err != nil {
+			log.Printf("Failed to read segment file %s: %v", f.Name(), err)
 			http.Error(w, "failed to read segment file", http.StatusInternalServerError)
 			return
 		}
 
 		err = s.contentService.Write(videoId, f.Name(), data)
 		if err != nil {
+			log.Printf("Failed to write segment file %s: %v", f.Name(), err)
 			http.Error(w, "failed to write segment file", http.StatusInternalServerError)
 			return
 		}
