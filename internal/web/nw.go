@@ -14,6 +14,7 @@ import (
 	"tritontube/internal/proto"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // NetworkVideoContentService implements VideoContentService using a network of nodes.
@@ -36,11 +37,9 @@ func NewNetworkVideoContentService(nodeAddrs []string) (*NetworkVideoContentServ
 	nodeHashes := make([]uint64, 0, len(nodeAddrs))
 
 	for _, addr := range nodeAddrs {
-		conn, err := grpc.Dial(
+		conn, err := grpc.NewClient(
 			addr,
-			grpc.WithInsecure(),
-			grpc.WithBlock(),
-			grpc.WithTimeout(5*time.Second),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithDefaultCallOptions(
 				grpc.MaxCallSendMsgSize(32*1024*1024),
 				grpc.MaxCallRecvMsgSize(32*1024*1024),
@@ -155,7 +154,7 @@ func (n *NetworkVideoContentService) AddNode(ctx context.Context, req *proto.Add
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	node := req.NodeAddress
-	conn, err := grpc.Dial(node, grpc.WithInsecure())
+	conn, err := grpc.NewClient(node, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	if err != nil {
 		return nil, fmt.Errorf("[AddNode] failed to connect to new node %s: %v", node, err)

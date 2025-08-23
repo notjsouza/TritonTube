@@ -85,7 +85,7 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := r.ParseMultipartForm(10 << 20)
+	err := r.ParseMultipartForm(100 << 20) // 100 MB limit for video uploads
 	if err != nil {
 		http.Error(w, "invalid form data", http.StatusBadRequest)
 		return
@@ -145,9 +145,11 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		"-seg_duration", "4",
 		manifestPath,
 	)
+	cmd.Dir = tempDir // Set working directory to temp directory
 
-	_, err = cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		log.Printf("FFmpeg conversion failed: %v\nOutput: %s", err, string(output))
 		http.Error(w, "video conversion failed", http.StatusInternalServerError)
 		return
 	}

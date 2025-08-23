@@ -61,23 +61,23 @@ func main() {
 	// Construct metadata service
 	var metadataService web.VideoMetadataService
 	fmt.Println("Creating metadata service of type", metadataServiceType, "with options", metadataServiceOptions)
-	// TODO: Implement metadata service creation logic
 
 	switch metadataServiceType {
 	case "sqlite":
 		var err error
 		metadataService, err = web.NewSQLiteVideoMetadataService(metadataServiceOptions)
 		if err != nil {
+			fmt.Printf("Error creating SQLite metadata service: %v\n", err)
 			return
 		}
 	default:
+		fmt.Printf("Error: Unsupported metadata service type: %s\n", metadataServiceType)
 		return
 	}
 
 	// Construct content service
 	var contentService web.VideoContentService
 	fmt.Println("Creating content service of type", contentServiceType, "with options", contentServiceOptions)
-	// TODO: Implement content service creation logic
 
 	switch contentServiceType {
 	case "fs":
@@ -86,6 +86,7 @@ func main() {
 		parts := strings.Split(contentServiceOptions, ",")
 
 		if len(parts) < 2 {
+			fmt.Println("Error: Network content service requires at least admin address and one storage address")
 			return
 		}
 
@@ -94,6 +95,7 @@ func main() {
 		svc, err := web.NewNetworkVideoContentService(storageAddrs)
 
 		if err != nil {
+			fmt.Printf("Error creating network content service: %v\n", err)
 			return
 		}
 
@@ -117,6 +119,7 @@ func main() {
 			}
 		}()
 	default:
+		fmt.Printf("Error: Unsupported content service type: %s\n", contentServiceType)
 		return
 	}
 

@@ -5,9 +5,10 @@ package web
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type SQLiteVideoMetadataService struct {
@@ -18,7 +19,7 @@ type SQLiteVideoMetadataService struct {
 var _ VideoMetadataService = (*SQLiteVideoMetadataService)(nil)
 
 func NewSQLiteVideoMetadataService(dbPath string) (*SQLiteVideoMetadataService, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +45,7 @@ func (s *SQLiteVideoMetadataService) Create(videoId string, uploadedAt time.Time
 	)
 
 	if err != nil {
-		if sqliteErr, ok := err.(sqlite3.Error); ok && sqliteErr.ExtendedCode == sqlite3.ErrConstraintPrimaryKey {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return errors.New("video ID already exists")
 		}
 
