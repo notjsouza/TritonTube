@@ -88,3 +88,21 @@ func (s *SQLiteVideoMetadataService) Read(videoId string) (*VideoMetadata, error
 
 	return &v, nil
 }
+
+func (s *SQLiteVideoMetadataService) Delete(videoId string) error {
+	result, err := s.db.Exec("DELETE FROM video_metadata WHERE video_id = ?", videoId)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return errors.New("video not found")
+	}
+
+	return nil
+}

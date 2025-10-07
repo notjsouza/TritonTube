@@ -11,6 +11,7 @@ type VideoMetadataService interface {
 	Read(id string) (*VideoMetadata, error)
 	List() ([]VideoMetadata, error)
 	Create(videoId string, uploadedAt time.Time) error
+	Delete(id string) error
 }
 
 type VideoContentService interface {
