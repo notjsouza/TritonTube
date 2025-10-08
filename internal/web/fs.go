@@ -43,3 +43,12 @@ func (fs *FSVideoContentService) Read(videoId string, filename string) ([]byte, 
 
 	return data, nil
 }
+
+func (fs *FSVideoContentService) DeleteAll(videoId string) error {
+	videoDir := filepath.Join(fs.baseDir, videoId)
+	if err := os.RemoveAll(videoDir); err != nil {
+		return fmt.Errorf("failed to delete video directory: %w", err)
+	}
+
+	return nil
+}

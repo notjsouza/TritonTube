@@ -313,3 +313,42 @@ func hashStringToUint64(s string) uint64 {
 	sum := sha256.Sum256([]byte(s))
 	return binary.BigEndian.Uint64(sum[:8])
 }
+
+func (n *NetworkVideoContentService) DeleteAll(videoId string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	// Send delete command to ALL storage nodes
+	// This ensures the video is deleted even if it's distributed across nodes
+	var lastErr error
+	deletedCount := 0
+
+	for nodeAddr, client := range n.clients {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+		// Use special filename ".DELETE_ALL" to trigger directory deletion
+		resp, err := client.WriteFile(ctx, &proto.WriteFileRequest{
+			VideoId:  videoId,
+			Filename: ".DELETE_ALL",
+			Data:     []byte{}, // Empty data
+		})
+
+		cancel()
+
+		if err != nil {
+			fmt.Printf("Failed to delete video %s from node %s: %v\n", videoId, nodeAddr, err)
+			lastErr = err
+		} else if resp.Success {
+			deletedCount++
+		}
+	}
+
+	// Remove from file registry
+	delete(n.fileRegistry, videoId)
+
+	if deletedCount > 0 {
+		fmt.Printf("Successfully deleted video %s from %d storage node(s)\n", videoId, deletedCount)
+	}
+
+	return lastErr
+}

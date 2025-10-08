@@ -17,4 +17,5 @@ type VideoMetadataService interface {
 type VideoContentService interface {
 	Read(videoId string, filename string) ([]byte, error)
 	Write(videoId string, filename string, data []byte) error
+	DeleteAll(videoId string) error
 }

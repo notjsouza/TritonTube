@@ -22,6 +22,15 @@ type Server struct {
 }
 
 func (s *Server) WriteFile(ctx context.Context, req *proto.WriteFileRequest) (*proto.WriteFileResponse, error) {
+	// Special command to delete entire video directory
+	if req.Filename == ".DELETE_ALL" {
+		dir := filepath.Join(s.BaseDir, req.VideoId)
+		if err := os.RemoveAll(dir); err != nil {
+			return &proto.WriteFileResponse{Success: false}, fmt.Errorf("failed to delete directory: %v", err)
+		}
+		return &proto.WriteFileResponse{Success: true}, nil
+	}
+
 	dir := filepath.Join(s.BaseDir, req.VideoId)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return &proto.WriteFileResponse{Success: false}, fmt.Errorf("failed to create directory: %v", err)

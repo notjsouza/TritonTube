@@ -54,6 +54,7 @@ func (s *server) Start(lis net.Listener) error {
 
 	// Content endpoints (binary responses)
 	s.mux.HandleFunc("/content/", s.handleVideoContent)
+	s.mux.HandleFunc("/thumbnail/", s.handleThumbnail)
 
 	// Legacy HTML endpoints
 	s.mux.HandleFunc("/upload", s.handleUpload)
@@ -269,6 +270,34 @@ func (s *server) handleVideoContent(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (s *server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
+	// parse /thumbnail/<videoId>
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	videoId := strings.TrimPrefix(r.URL.Path, "/thumbnail/")
+	if videoId == "" {
+		http.Error(w, "video ID required", http.StatusBadRequest)
+		return
+	}
+
+	log.Println("Thumbnail request for video ID:", videoId)
+
+	data, err := s.contentService.Read(videoId, "thumbnail.jpg")
+	if err != nil {
+		log.Printf("Failed to read thumbnail for %s: %v", videoId, err)
+		http.Error(w, "thumbnail not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "public, max-age=86400") // Cache for 24 hours
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
 // CORS middleware to allow frontend requests
 func (s *server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -295,11 +324,12 @@ func (s *server) corsMiddleware(next http.Handler) http.Handler {
 
 // API Response structures
 type apiVideoResponse struct {
-	Id          string `json:"id"`
-	EscapedId   string `json:"escapedId"`
-	UploadTime  string `json:"uploadTime"`
-	UploadedAt  string `json:"uploadedAt"`
-	ManifestUrl string `json:"manifestUrl"`
+	Id           string `json:"id"`
+	EscapedId    string `json:"escapedId"`
+	UploadTime   string `json:"uploadTime"`
+	UploadedAt   string `json:"uploadedAt"`
+	ManifestUrl  string `json:"manifestUrl"`
+	ThumbnailUrl string `json:"thumbnailUrl"`
 }
 
 type apiVideosListResponse struct {
@@ -332,11 +362,12 @@ func (s *server) handleAPIVideos(w http.ResponseWriter, r *http.Request) {
 	videos := make([]apiVideoResponse, 0, len(metas))
 	for _, m := range metas {
 		videos = append(videos, apiVideoResponse{
-			Id:          m.Id,
-			EscapedId:   url.PathEscape(m.Id),
-			UploadTime:  m.UploadedAt.Format(time.RFC3339),
-			UploadedAt:  m.UploadedAt.Format(time.RFC3339),
-			ManifestUrl: "/content/" + url.PathEscape(m.Id) + "/manifest.mpd",
+			Id:           m.Id,
+			EscapedId:    url.PathEscape(m.Id),
+			UploadTime:   m.UploadedAt.Format(time.RFC3339),
+			UploadedAt:   m.UploadedAt.Format(time.RFC3339),
+			ManifestUrl:  "/content/" + url.PathEscape(m.Id) + "/manifest.mpd",
+			ThumbnailUrl: "/thumbnail/" + url.PathEscape(m.Id),
 		})
 	}
 
@@ -377,11 +408,12 @@ func (s *server) handleAPIVideoDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := apiVideoResponse{
-		Id:          meta.Id,
-		EscapedId:   url.PathEscape(meta.Id),
-		UploadTime:  meta.UploadedAt.Format(time.RFC3339),
-		UploadedAt:  meta.UploadedAt.Format(time.RFC3339),
-		ManifestUrl: "/content/" + url.PathEscape(meta.Id) + "/manifest.mpd",
+		Id:           meta.Id,
+		EscapedId:    url.PathEscape(meta.Id),
+		UploadTime:   meta.UploadedAt.Format(time.RFC3339),
+		UploadedAt:   meta.UploadedAt.Format(time.RFC3339),
+		ManifestUrl:  "/content/" + url.PathEscape(meta.Id) + "/manifest.mpd",
+		ThumbnailUrl: "/thumbnail/" + url.PathEscape(meta.Id),
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
@@ -465,6 +497,26 @@ func (s *server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate thumbnail from first frame
+	thumbnailPath := filepath.Join(tempDir, "thumbnail.jpg")
+	thumbnailCmd := exec.Command("ffmpeg",
+		"-i", videoPath,
+		"-vframes", "1", // Extract only 1 frame
+		"-ss", "00:00:00", // At 0 seconds (first frame)
+		"-vf", "scale=320:-1", // Scale to 320px width, maintain aspect ratio
+		"-q:v", "2", // High quality JPEG (1-31, lower is better)
+		thumbnailPath,
+	)
+	thumbnailCmd.Dir = tempDir
+
+	thumbnailOutput, err := thumbnailCmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Warning: Thumbnail generation failed: %v\nOutput: %s", err, string(thumbnailOutput))
+		// Don't fail the upload if thumbnail generation fails
+	} else {
+		log.Printf("Thumbnail generated successfully for video: %s", videoId)
+	}
+
 	files, err := os.ReadDir(tempDir)
 	if err != nil {
 		log.Printf("Failed to read temp directory: %v", err)
@@ -500,11 +552,12 @@ func (s *server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := apiVideoResponse{
-		Id:          videoId,
-		EscapedId:   url.PathEscape(videoId),
-		UploadTime:  time.Now().Format(time.RFC3339),
-		UploadedAt:  time.Now().Format(time.RFC3339),
-		ManifestUrl: "/content/" + url.PathEscape(videoId) + "/manifest.mpd",
+		Id:           videoId,
+		EscapedId:    url.PathEscape(videoId),
+		UploadTime:   time.Now().Format(time.RFC3339),
+		UploadedAt:   time.Now().Format(time.RFC3339),
+		ManifestUrl:  "/content/" + url.PathEscape(videoId) + "/manifest.mpd",
+		ThumbnailUrl: "/thumbnail/" + url.PathEscape(videoId),
 	}
 
 	s.sendJSON(w, response, http.StatusCreated)
@@ -536,6 +589,13 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Delete content files from storage nodes
+	err = s.contentService.DeleteAll(videoId)
+	if err != nil {
+		log.Printf("Warning: Failed to delete video content from storage nodes: %v", err)
+		// Continue anyway to delete metadata
+	}
+
 	// Delete from metadata database
 	err = s.metadataService.Delete(videoId)
 	if err != nil {
@@ -544,12 +604,11 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Note: Content files remain on storage nodes for now
-	// A background cleanup job could be implemented to remove orphaned content
+	log.Printf("Successfully deleted video: %s", videoId)
 
 	response := map[string]interface{}{
 		"success": true,
-		"message": "video deleted successfully",
+		"message": "video deleted successfully (metadata and content)",
 		"id":      videoId,
 	}
 
