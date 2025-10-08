@@ -41,8 +41,8 @@ func NewNetworkVideoContentService(nodeAddrs []string) (*NetworkVideoContentServ
 			addr,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithDefaultCallOptions(
-				grpc.MaxCallSendMsgSize(32*1024*1024),
-				grpc.MaxCallRecvMsgSize(32*1024*1024),
+				grpc.MaxCallSendMsgSize(256*1024*1024),
+				grpc.MaxCallRecvMsgSize(256*1024*1024),
 			),
 		)
 

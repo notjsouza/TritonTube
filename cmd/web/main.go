@@ -31,6 +31,7 @@ func main() {
 	// Define flags
 	port := flag.Int("port", 8080, "Port number for the web server")
 	host := flag.String("host", "localhost", "Host address for the web server")
+	adminPort := flag.Int("admin-port", 8081, "Port number for the admin gRPC server (for managing storage nodes)")
 
 	// Set custom usage message
 	flag.Usage = printUsage
@@ -83,15 +84,13 @@ func main() {
 	case "fs":
 		contentService = web.NewFSVideoContentService(contentServiceOptions)
 	case "nw":
-		parts := strings.Split(contentServiceOptions, ",")
+		storageAddrs := strings.Split(contentServiceOptions, ",")
 
-		if len(parts) < 2 {
-			fmt.Println("Error: Network content service requires at least admin address and one storage address")
+		if len(storageAddrs) < 1 {
+			fmt.Println("Error: Network content service requires at least one storage address")
 			return
 		}
 
-		adminAddr := parts[0]
-		storageAddrs := parts[1:]
 		svc, err := web.NewNetworkVideoContentService(storageAddrs)
 
 		if err != nil {
@@ -101,6 +100,8 @@ func main() {
 
 		contentService = svc
 
+		// Start admin gRPC server for managing storage nodes (add/remove/list)
+		adminAddr := fmt.Sprintf("%s:%d", *host, *adminPort)
 		go func() {
 			lis, err := net.Listen("tcp", adminAddr)
 
@@ -111,10 +112,10 @@ func main() {
 
 			grpcServer := grpc.NewServer()
 			proto.RegisterVideoContentAdminServiceServer(grpcServer, svc)
-			fmt.Println("Admin gREC server listening at", adminAddr)
+			fmt.Println("Admin gRPC server listening at", adminAddr)
 
 			if err := grpcServer.Serve(lis); err != nil {
-				fmt.Println("Error serving admin gREC server:", err)
+				fmt.Println("Error serving admin gRPC server:", err)
 				return
 			}
 		}()

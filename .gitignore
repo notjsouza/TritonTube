@@ -24,6 +24,7 @@ go.work.sum
 *.mp4
 *.mpd
 *.m4s
+*.jpg
 
 # dependencies
 /node_modules

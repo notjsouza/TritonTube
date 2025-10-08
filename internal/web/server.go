@@ -179,6 +179,12 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Skip the original MP4 file - we only need DASH segments
+		if strings.HasSuffix(f.Name(), ".mp4") {
+			log.Printf("Skipping original MP4 file: %s (not needed after conversion)", f.Name())
+			continue
+		}
+
 		data, err := os.ReadFile(filepath.Join(tempDir, f.Name()))
 		if err != nil {
 			log.Printf("Failed to read segment file %s: %v", f.Name(), err)
@@ -526,6 +532,12 @@ func (s *server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 
 	for _, f := range files {
 		if f.IsDir() {
+			continue
+		}
+
+		// Skip the original MP4 file - we only need DASH segments
+		if strings.HasSuffix(f.Name(), ".mp4") {
+			log.Printf("Skipping original MP4 file: %s (not needed after conversion)", f.Name())
 			continue
 		}
 
