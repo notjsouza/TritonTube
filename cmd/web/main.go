@@ -71,6 +71,13 @@ func main() {
 			fmt.Printf("Error creating SQLite metadata service: %v\n", err)
 			return
 		}
+	case "postgres":
+		var err error
+		metadataService, err = web.NewPostgresVideoMetadataService(metadataServiceOptions)
+		if err != nil {
+			fmt.Printf("Error creating PostgreSQL metadata service: %v\n", err)
+			return
+		}
 	default:
 		fmt.Printf("Error: Unsupported metadata service type: %s\n", metadataServiceType)
 		return
@@ -83,6 +90,14 @@ func main() {
 	switch contentServiceType {
 	case "fs":
 		contentService = web.NewFSVideoContentService(contentServiceOptions)
+	case "s3":
+		// contentServiceOptions should be the S3 bucket name
+		var err error
+		contentService, err = web.NewS3VideoContentService(contentServiceOptions)
+		if err != nil {
+			fmt.Printf("Error creating S3 content service: %v\n", err)
+			return
+		}
 	case "nw":
 		storageAddrs := strings.Split(contentServiceOptions, ",")
 

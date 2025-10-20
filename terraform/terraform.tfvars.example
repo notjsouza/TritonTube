@@ -1,0 +1,26 @@
+# Copy this file to terraform.tfvars and update with your values
+# NEVER commit terraform.tfvars to git (it's in .gitignore)
+
+aws_region   = "us-west-1"
+project_name = "tritontube"
+environment  = "prod"
+
+# Database Configuration
+db_username       = "tritontubeadmin"
+db_password       = "YourStrongPassword123!" # Change this!
+db_name           = "tritontube"
+db_instance_class = "db.t3.micro"
+
+# ECS Configuration
+container_image  = "992382698108.dkr.ecr.us-west-1.amazonaws.com/tritontube-backend:latest" # Update after ECR push
+container_cpu    = 512
+container_memory = 1024
+desired_count    = 2
+
+# Auto Scaling
+enable_autoscaling = true
+min_capacity       = 2
+max_capacity       = 10
+
+# Networking
+vpc_cidr = "10.0.0.0/16"

@@ -26,6 +26,18 @@ go.work.sum
 *.m4s
 *.jpg
 
+# Database files
+*.db
+metadata.db
+
+# Deployment artifacts
+deployment-info.txt
+deployment-info.json
+
+# AWS CLI artifacts
+aws
+.aws/
+
 # dependencies
 /node_modules
 /.pnp

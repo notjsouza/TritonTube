@@ -1,0 +1,43 @@
+# Binaries
+main
+tritontube
+*.exe
+
+# Go
+*.test
+*.out
+vendor/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+*.db
+storage/
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/tfplan
+terraform/*.tfvars
+!terraform/terraform.tfvars.example
+
+# Deployment info
+deployment-info.txt
+deployment-info.json
+
+# Node
+node_modules/
+build/
+.env.local
+.env.production.local
+
+# Logs
+*.log
