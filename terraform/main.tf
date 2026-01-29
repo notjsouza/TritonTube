@@ -36,14 +36,6 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# IAM Module
-module "iam" {
-  source = "./modules/iam"
-
-  project_name = var.project_name
-  environment  = var.environment
-}
-
 # Networking Module
 module "networking" {
   source = "./modules/networking"
@@ -60,6 +52,20 @@ module "s3" {
 
   project_name = var.project_name
   environment  = var.environment
+}
+
+# IAM Module - Must come after S3 but before ECS
+module "iam" {
+  source = "./modules/iam"
+
+  project_name         = var.project_name
+  environment          = var.environment
+  # These will be passed from ECS outputs, but IAM policies reference them by name pattern
+  # The actual resources are created in ECS module, but IAM needs to know about them
+  dynamodb_table_arn   = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-video-metadata"
+  sqs_queue_arn        = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${var.project_name}-upload-jobs"
+  s3_bucket_name       = module.s3.video_bucket_name
+  uploads_bucket_name  = module.s3.uploads_bucket_name
 }
 
 # CloudFront Module

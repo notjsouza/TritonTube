@@ -58,6 +58,7 @@
   },
   "devDependencies": {
     "@types/react-router-dom": "^5.3.3",
+    "baseline-browser-mapping": "^2.9.19",
     "typescript": "^4.9.5"
   }
 }

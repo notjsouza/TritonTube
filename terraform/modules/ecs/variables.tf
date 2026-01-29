@@ -56,12 +56,6 @@ variable "desired_count" {
   default     = 2
 }
 
-variable "db_connection_string" {
-  description = "Database connection string"
-  type        = string
-  sensitive   = true
-}
-
 variable "s3_bucket" {
   description = "S3 bucket name for video storage"
   type        = string

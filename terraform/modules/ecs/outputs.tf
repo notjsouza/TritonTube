@@ -62,8 +62,3 @@ output "worker_service_name" {
   description = "Name of the ECS worker service"
   value       = aws_ecs_service.worker.name
 }
-
-output "worker_task_role_arn" {
-  description = "IAM Role ARN for ECS worker tasks"
-  value       = aws_iam_role.task_role.arn
-}

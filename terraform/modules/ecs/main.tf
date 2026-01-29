@@ -166,27 +166,6 @@ resource "aws_sqs_queue" "upload_jobs" {
 }
 
 # IAM role and policy for ECS tasks (allows SQS SendMessage for API and SQS Receive/Delete + S3 access for worker)
-resource "aws_iam_role" "task_role" {
-  name = "${var.project_name}-task-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "ecs-tasks.amazonaws.com"
-        }
-      }
-    ]
-  })
-
-  tags = {
-    Name = "${var.project_name}-task-role"
-  }
-}
-
 # DynamoDB Table for video metadata
 resource "aws_dynamodb_table" "video_metadata" {
   name           = "${var.project_name}-video-metadata"
@@ -203,65 +182,6 @@ resource "aws_dynamodb_table" "video_metadata" {
   }
 }
 
-resource "aws_iam_policy" "ecs_task_policy" {
-  name        = "${var.project_name}-ecs-task-policy"
-  description = "Policy to allow SQS, S3, and DynamoDB operations for backend and worker tasks"
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Action = [
-          "sqs:SendMessage"
-        ],
-        Resource = aws_sqs_queue.upload_jobs.arn
-      },
-      {
-        Effect = "Allow",
-        Action = [
-          "sqs:ReceiveMessage",
-          "sqs:DeleteMessage",
-          "sqs:GetQueueAttributes",
-          "sqs:ChangeMessageVisibility"
-        ],
-        Resource = aws_sqs_queue.upload_jobs.arn
-      },
-      {
-        Effect = "Allow",
-        Action = [
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:ListBucket",
-          "s3:DeleteObject"
-        ],
-        Resource = [
-          "arn:aws:s3:::${var.s3_bucket}",
-          "arn:aws:s3:::${var.s3_bucket}/*",
-          "arn:aws:s3:::${var.uploads_bucket}",
-          "arn:aws:s3:::${var.uploads_bucket}/*"
-        ]
-      },
-      {
-        Effect = "Allow",
-        Action = [
-          "dynamodb:PutItem",
-          "dynamodb:GetItem",
-          "dynamodb:DeleteItem",
-          "dynamodb:Scan",
-          "dynamodb:Query"
-        ],
-        Resource = aws_dynamodb_table.video_metadata.arn
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "task_policy_attach" {
-  role       = aws_iam_role.task_role.name
-  policy_arn = aws_iam_policy.ecs_task_policy.arn
-}
-
 /*
   Worker ECS task & service: lightweight task that runs the `worker` image (same ECR repo) and polls SQS.
   This is created as a separate task definition & service but reuses the cluster and log group.
@@ -274,7 +194,7 @@ resource "aws_ecs_task_definition" "worker" {
   cpu                      = var.worker_cpu
   memory                   = var.worker_memory
   execution_role_arn       = var.task_execution_role_arn
-  task_role_arn            = aws_iam_role.task_role.arn
+  task_role_arn            = var.task_role_arn
 
   container_definitions = jsonencode([
     {
@@ -330,7 +250,7 @@ resource "aws_ecs_task_definition" "main" {
   cpu                      = var.container_cpu
   memory                   = var.container_memory
   execution_role_arn       = var.task_execution_role_arn
-  task_role_arn            = var.task_role_arn != "" ? var.task_role_arn : aws_iam_role.task_role.arn
+  task_role_arn            = var.task_role_arn
 
   container_definitions = jsonencode([
     {
