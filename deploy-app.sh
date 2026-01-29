@@ -65,20 +65,26 @@ if [ ! -f "terraform.tfstate" ]; then
     exit 1
 fi
 
-ECR_URL=$(terraform output -raw ecr_repository_url 2>/dev/null)
-FRONTEND_BUCKET=$(terraform output -raw frontend_bucket_id 2>/dev/null)
-FRONTEND_CDN_ID=$(terraform output -raw frontend_cdn_id 2>/dev/null)
-ALB_DNS=$(terraform output -raw alb_dns_name 2>/dev/null)
+ECR_URL=$(terraform output -raw ecr_repository_url 2>/dev/null || true)
+FRONTEND_BUCKET=$(terraform output -raw frontend_bucket_name 2>/dev/null || true)
+FRONTEND_CDN_ID=$(terraform output -raw frontend_cdn_id 2>/dev/null || true)
+ALB_DNS=$(terraform output -raw alb_dns_name 2>/dev/null || true)
+VIDEO_CDN=$(terraform output -raw video_cdn_domain 2>/dev/null || true)
 
 if [ -z "$ECR_URL" ]; then
-    echo "Error: Could not get ECR URL from Terraform. Ensure infrastructure is deployed"
+    echo "Error: Could not get ECR URL from Terraform. Ensure infrastructure is deployed and 'terraform apply' was run from the terraform/ directory."
+    echo "Run: cd terraform && terraform apply"
     exit 1
 fi
 
 echo "   ECR Repository: $ECR_URL"
 echo "   Frontend Bucket: $FRONTEND_BUCKET"
 echo "   ALB DNS: $ALB_DNS"
+echo "   Video CDN: $VIDEO_CDN"
 echo "   ✓ Configuration loaded"
+echo ""
+echo "Terraform outputs (summary):"
+terraform output || true
 echo ""
 
 cd ..
@@ -174,6 +180,9 @@ else
     fi
 
     echo "Building frontend (React)..."
+    # Inject API and CDN environment variables from Terraform outputs for production build
+    export REACT_APP_API_URL="http://$ALB_DNS"
+    export REACT_APP_VIDEO_CDN="https://$VIDEO_CDN"
     npm run build
 
     if [ $? -ne 0 ]; then
@@ -181,7 +190,12 @@ else
         exit 1
     fi
 
-    echo "Deploying to S3..."
+    if [ -z "$FRONTEND_BUCKET" ]; then
+        echo "Error: FRONTEND_BUCKET is empty. Check that 'frontend_bucket_id' is set in Terraform outputs."
+        exit 1
+    fi
+
+    echo "Deploying to S3 (bucket: $FRONTEND_BUCKET)..."
     aws s3 sync build/ s3://$FRONTEND_BUCKET/ --delete
 
     echo "Creating CloudFront invalidation..."

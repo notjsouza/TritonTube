@@ -15,6 +15,14 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"context"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
 type server struct {
@@ -49,7 +57,9 @@ func (s *server) Start(lis net.Listener) error {
 	// API endpoints (JSON responses)
 	s.mux.HandleFunc("/api/videos", s.handleAPIVideos)
 	s.mux.HandleFunc("/api/videos/", s.handleAPIVideoDetail)
+	s.mux.HandleFunc("/api/presign-upload", s.handleAPIPresignUpload)
 	s.mux.HandleFunc("/api/upload", s.handleAPIUpload)
+	s.mux.HandleFunc("/api/process", s.handleAPIProcess)
 	s.mux.HandleFunc("/api/delete/", s.handleAPIDelete)
 
 	// Content endpoints (binary responses)
@@ -641,4 +651,226 @@ func (s *server) sendJSONError(w http.ResponseWriter, message string, status int
 		Error:   http.StatusText(status),
 		Message: message,
 	})
+}
+
+// ---- New endpoints: presign-upload and process ----
+
+// handleAPIPresignUpload returns a presigned PUT URL for direct S3 upload.
+// Request: POST with JSON { "videoId": "my-video-id", "filename": "my.mp4" }
+// Response: { "url": "https://...", "headers": {} }
+func (s *server) handleAPIPresignUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.sendJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		VideoId  string `json:"videoId"`
+		Filename string `json:"filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.VideoId == "" || body.Filename == "" {
+		s.sendJSONError(w, "videoId and filename are required", http.StatusBadRequest)
+		return
+	}
+
+	// Build S3 key under uploads/ prefix to separate raw uploads
+	key := filepath.Join("uploads", body.VideoId, body.Filename)
+
+	// Use AWS SDK v2 to create a presigned PUT URL
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		log.Printf("Failed to load AWS config for presign: %v", err)
+		s.sendJSONError(w, "failed to create presigned url", http.StatusInternalServerError)
+		return
+	}
+	s3client := s3.NewFromConfig(cfg)
+	presigner := s3.NewPresignClient(s3client)
+
+	// PutObject presign
+	bucketName := GetS3BucketFromEnv()
+	putInput := &s3.PutObjectInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(key),
+		ACL:    s3types.ObjectCannedACLPrivate,
+	}
+
+	presignResp, err := presigner.PresignPutObject(context.TODO(), putInput)
+	if err != nil {
+		log.Printf("Failed to presign PUT object: %v", err)
+		s.sendJSONError(w, "failed to create presigned url", http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"url":    presignResp.URL,
+		"method": "PUT",
+		"key":    key,
+	}
+	s.sendJSON(w, resp, http.StatusOK)
+}
+
+// handleAPIProcess accepts a notification from the client after a direct S3 upload
+// and enqueues processing (here we'll spawn a goroutine as a simple worker for dev).
+// Request: POST { "videoId": "...", "filename": "..." }
+func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.sendJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		VideoId  string `json:"videoId"`
+		Filename string `json:"filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.VideoId == "" || body.Filename == "" {
+		s.sendJSONError(w, "videoId and filename are required", http.StatusBadRequest)
+		return
+	}
+
+	// If SQS queue URL is configured, enqueue a message and return immediately
+	queueURL := os.Getenv("SQS_QUEUE_URL")
+	if queueURL != "" {
+		// Build message body
+		msgBody, _ := json.Marshal(map[string]string{"videoId": body.VideoId, "filename": body.Filename})
+		cfg, cfgErr := config.LoadDefaultConfig(context.TODO())
+		if cfgErr == nil {
+			sqsClient := sqs.NewFromConfig(cfg)
+			_, sendErr := sqsClient.SendMessage(context.TODO(), &sqs.SendMessageInput{
+				QueueUrl:    &queueURL,
+				MessageBody: aws.String(string(msgBody)),
+			})
+			if sendErr == nil {
+				// Enqueued successfully
+				resp := map[string]interface{}{
+					"status":  "enqueued",
+					"videoId": body.VideoId,
+				}
+				s.sendJSON(w, resp, http.StatusAccepted)
+				return
+			}
+			log.Printf("Failed to send SQS message: %v", sendErr)
+		} else {
+			log.Printf("Failed to load AWS config for SQS send: %v", cfgErr)
+		}
+		// If SQS send failed, fall back to in-process worker
+	}
+
+	// Launch background goroutine to download the uploaded file from uploads/ and run processing
+	go func(videoId, filename string) {
+		// Create temp dir for processing
+		tmp, err := os.MkdirTemp("", "proc-*")
+		if err != nil {
+			log.Printf("Background worker: failed to create temp dir: %v", err)
+			return
+		}
+		defer os.RemoveAll(tmp)
+
+		// Download the uploaded file from S3 (uploads/<videoId>/<filename>) into tmp
+		srcKey := filepath.Join("uploads", videoId, filename)
+
+		cfg, err := config.LoadDefaultConfig(context.TODO())
+		if err != nil {
+			log.Printf("Background worker: failed to load AWS config: %v", err)
+			return
+		}
+		s3client := s3.NewFromConfig(cfg)
+
+		bucketName := GetS3BucketFromEnv()
+		getResp, err := s3client.GetObject(context.TODO(), &s3.GetObjectInput{
+			Bucket: aws.String(bucketName),
+			Key:    aws.String(srcKey),
+		})
+		if err != nil {
+			log.Printf("Background worker: failed to download uploaded file %s: %v", srcKey, err)
+			return
+		}
+		defer getResp.Body.Close()
+
+		localPath := filepath.Join(tmp, filename)
+		out, err := os.Create(localPath)
+		if err != nil {
+			log.Printf("Background worker: failed to create local file: %v", err)
+			return
+		}
+		_, err = io.Copy(out, getResp.Body)
+		out.Close()
+		if err != nil {
+			log.Printf("Background worker: failed to write local file: %v", err)
+			return
+		}
+
+		// Run FFmpeg to produce DASH segments into tmp
+		manifestPath := filepath.Join(tmp, "manifest.mpd")
+		cmd := exec.Command("ffmpeg",
+			"-i", localPath,
+			"-c:v", "libx264",
+			"-c:a", "aac",
+			"-bf", "1",
+			"-keyint_min", "120",
+			"-g", "120",
+			"-sc_threshold", "0",
+			"-b:v", "3000k",
+			"-b:a", "128k",
+			"-f", "dash",
+			"-use_timeline", "1",
+			"-use_template", "1",
+			"-init_seg_name", "init-$RepresentationID$.m4s",
+			"-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.m4s",
+			"-seg_duration", "4",
+			manifestPath,
+		)
+		cmd.Dir = tmp
+		outb, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Printf("Background worker: ffmpeg failed: %v, output: %s", err, string(outb))
+			return
+		}
+
+		// Upload generated files to final video location using s.contentService.Write
+		files, err := os.ReadDir(tmp)
+		if err != nil {
+			log.Printf("Background worker: readdir failed: %v", err)
+			return
+		}
+		for _, f := range files {
+			if f.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(f.Name(), ".mp4") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(tmp, f.Name()))
+			if err != nil {
+				log.Printf("Background worker: read file failed: %v", err)
+				return
+			}
+			if err := s.contentService.Write(videoId, f.Name(), data); err != nil {
+				log.Printf("Background worker: write to content service failed: %v", err)
+				return
+			}
+		}
+
+		// Save metadata
+		if err := s.metadataService.Create(videoId, time.Now()); err != nil {
+			log.Printf("Background worker: failed to create metadata: %v", err)
+			return
+		}
+
+		log.Printf("Background worker: processing completed for %s", videoId)
+	}(body.VideoId, body.Filename)
+
+	// Respond immediately
+	resp := map[string]interface{}{
+		"status":  "processing_started",
+		"videoId": body.VideoId,
+	}
+	s.sendJSON(w, resp, http.StatusAccepted)
 }

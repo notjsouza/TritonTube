@@ -73,21 +73,6 @@ module "cloudfront" {
   frontend_bucket_website   = module.s3.frontend_bucket_website_endpoint
 }
 
-# RDS Module
-module "rds" {
-  source = "./modules/rds"
-
-  project_name           = var.project_name
-  environment            = var.environment
-  vpc_id                 = module.networking.vpc_id
-  database_subnet_ids    = module.networking.database_subnet_ids
-  db_subnet_group_name   = module.networking.db_subnet_group_name
-  ecs_security_group_id  = module.ecs.ecs_task_security_group_id
-  db_username            = var.db_username
-  db_password            = var.db_password
-  db_instance_class      = var.db_instance_class
-}
-
 # ECS Module
 module "ecs" {
   source = "./modules/ecs"
@@ -107,7 +92,11 @@ module "ecs" {
   desired_count              = var.desired_count
   
   # Environment variables for container
-  db_connection_string       = "postgres://${var.db_username}:${var.db_password}@${module.rds.db_endpoint}/${var.db_name}"
   s3_bucket                  = module.s3.video_bucket_id
+  uploads_bucket             = module.s3.uploads_bucket_id
+  worker_image               = var.worker_image
+  worker_cpu                 = var.worker_cpu
+  worker_memory              = var.worker_memory
+  worker_desired_count       = var.worker_desired_count
   cdn_domain                 = module.cloudfront.video_cdn_domain
 }

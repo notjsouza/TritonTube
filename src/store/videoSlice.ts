@@ -31,12 +31,39 @@ export const uploadVideo = createAsyncThunk(
     }));
 
     try {
-      // Upload with progress tracking
+      // Upload with progress tracking using presigned PUT + notify
       const result = await api.uploadVideo(file, (progress) => {
         dispatch(updateUploadProgress({ id: uploadId, progress }));
       });
-      dispatch(updateUploadStatus({ id: uploadId, status: 'completed' }));
-      return result;
+
+      // result is expected to be { status: 'enqueued'|'processing_started', videoId }
+      const videoId = (result as any).videoId;
+      if (!videoId) {
+        dispatch(updateUploadStatus({ id: uploadId, status: 'error', error: 'No video id returned' }));
+        throw new Error('No video id returned');
+      }
+
+      // Poll for processing completion (GET /api/videos/{id}) with timeout
+      const pollIntervalMs = 5000; // 5 seconds
+      const maxAttempts = 240; // ~20 minutes
+      let attempts = 0;
+      while (attempts < maxAttempts) {
+        try {
+          const video = await api.getVideo(videoId);
+          // Video available -> mark completed
+          dispatch(updateUploadStatus({ id: uploadId, status: 'completed' }));
+          return video;
+        } catch (err) {
+          // Not ready yet; wait and retry
+          await new Promise((res) => setTimeout(res, pollIntervalMs));
+          attempts++;
+          continue;
+        }
+      }
+
+      // Timeout
+      dispatch(updateUploadStatus({ id: uploadId, status: 'error', error: 'Processing timed out' }));
+      throw new Error('Processing timed out');
     } catch (error) {
       dispatch(updateUploadStatus({ 
         id: uploadId, 

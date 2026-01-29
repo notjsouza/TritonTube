@@ -44,7 +44,7 @@ USER appuser
 EXPOSE 8080
 
 # Set default metadata and content options as environment variables
-ENV METADATA_TYPE=postgres
+ENV METADATA_TYPE=dynamodb
 ENV METADATA_OPTIONS=""
 ENV CONTENT_TYPE=s3
 ENV CONTENT_OPTIONS=tritontube-video-content

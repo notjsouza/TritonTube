@@ -22,32 +22,6 @@ variable "vpc_cidr" {
   default     = "10.0.0.0/16"
 }
 
-# Database Variables
-variable "db_username" {
-  description = "Master username for RDS instance"
-  type        = string
-  default     = "tritontubeadmin"
-  sensitive   = true
-}
-
-variable "db_password" {
-  description = "Master password for RDS instance"
-  type        = string
-  sensitive   = true
-}
-
-variable "db_name" {
-  description = "Name of the database to create"
-  type        = string
-  default     = "tritontube"
-}
-
-variable "db_instance_class" {
-  description = "RDS instance class"
-  type        = string
-  default     = "db.t3.micro"
-}
-
 # ECS Variables
 variable "container_image" {
   description = "Docker image for ECS task (update after pushing to ECR)"
@@ -71,6 +45,36 @@ variable "desired_count" {
   description = "Desired number of ECS tasks"
   type        = number
   default     = 2
+}
+
+variable "worker_image" {
+  description = "Docker image for the worker task (defaults to same repository with -worker tag)"
+  type        = string
+  default     = ""
+}
+
+variable "worker_cpu" {
+  description = "CPU for worker task"
+  type        = number
+  default     = 512
+}
+
+variable "worker_memory" {
+  description = "Memory for worker task in MB"
+  type        = number
+  default     = 1024
+}
+
+variable "worker_desired_count" {
+  description = "Desired number of worker tasks"
+  type        = number
+  default     = 1
+}
+
+variable "uploads_bucket" {
+  description = "Uploads bucket (temporary) name"
+  type        = string
+  default     = ""
 }
 
 variable "enable_autoscaling" {
