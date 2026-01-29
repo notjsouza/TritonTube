@@ -155,10 +155,23 @@ func main() {
 				thumbnailCmd.Dir = tmp
 				thumbnailOutput, err := thumbnailCmd.CombinedOutput()
 				if err != nil {
-					log.Printf("Warning: Thumbnail generation failed: %v\nOutput: %s", err, string(thumbnailOutput))
-					// Don't fail the job if thumbnail generation fails
+					log.Printf("========================================")
+					log.Printf("ERROR: Thumbnail generation FAILED for video: %s", payload.VideoId)
+					log.Printf("Error: %v", err)
+					log.Printf("FFmpeg output: %s", string(thumbnailOutput))
+					log.Printf("========================================")
+					// Don't fail the job if thumbnail generation fails, but make it very visible
 				} else {
-					log.Printf("Thumbnail generated successfully for video: %s", payload.VideoId)
+					// Verify thumbnail file was actually created
+					if _, statErr := os.Stat(thumbnailPath); statErr == nil {
+						log.Printf("✓ Thumbnail generated successfully for video: %s", payload.VideoId)
+					} else {
+						log.Printf("========================================")
+						log.Printf("ERROR: Thumbnail file not found after generation for video: %s", payload.VideoId)
+						log.Printf("Expected path: %s", thumbnailPath)
+						log.Printf("Stat error: %v", statErr)
+						log.Printf("========================================")
+					}
 				}
 
 				// Upload produced files in tmp directory to final content bucket under <videoId>/

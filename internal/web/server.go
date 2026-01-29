@@ -714,6 +714,17 @@ func (s *server) handleAPIPresignUpload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Check if video already exists to prevent race conditions
+	existingMeta, err := s.metadataService.Read(body.VideoId)
+	if err != nil {
+		log.Printf("Warning: Failed to check existing video metadata: %v", err)
+		// Continue anyway - better to allow upload than block on metadata check failure
+	} else if existingMeta != nil {
+		log.Printf("Upload rejected: video ID '%s' already exists with status '%s'", body.VideoId, existingMeta.Status)
+		s.sendJSONError(w, fmt.Sprintf("video ID '%s' already exists - please delete the existing video first or use a different ID", body.VideoId), http.StatusConflict)
+		return
+	}
+
 	// Build S3 key under uploads/ prefix to separate raw uploads
 	key := filepath.Join("uploads", body.VideoId, body.Filename)
 
@@ -783,8 +794,19 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 
 	// Create metadata entry immediately with "processing" status
 	if err := s.metadataService.CreateWithStatus(body.VideoId, time.Now(), "processing"); err != nil {
-		log.Printf("Failed to create metadata with processing status: %v", err)
-		// Continue anyway - will retry at end
+		log.Printf("ERROR: Failed to create metadata with processing status for '%s': %v", body.VideoId, err)
+		log.Printf("This may indicate a race condition - video might already exist or be processing")
+		// Check if it already exists
+		existingMeta, readErr := s.metadataService.Read(body.VideoId)
+		if readErr == nil && existingMeta != nil {
+			log.Printf("Confirmed: Video '%s' already exists with status '%s', uploadedAt: %v", body.VideoId, existingMeta.Status, existingMeta.UploadedAt)
+			s.sendJSONError(w, fmt.Sprintf("video '%s' already exists or is being processed", body.VideoId), http.StatusConflict)
+			return
+		}
+		// If we can't read it either, there's a bigger problem - fail the request
+		log.Printf("CRITICAL: Cannot create or read metadata for '%s' - rejecting processing request", body.VideoId)
+		s.sendJSONError(w, "failed to initialize video processing - please try again or use a different video ID", http.StatusInternalServerError)
+		return
 	}
 
 	// If SQS queue URL is configured, enqueue a message and return immediately
