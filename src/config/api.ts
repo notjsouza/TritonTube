@@ -1,6 +1,6 @@
 // API Configuration
-export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://tritontube-alb-371777292.us-west-1.elb.amazonaws.com';
-export const VIDEO_CDN_URL = process.env.REACT_APP_VIDEO_CDN || 'https://d2ujeim8ok9614.cloudfront.net';
+export const API_BASE_URL = process.env.REACT_APP_API_URL;
+export const VIDEO_CDN_URL = process.env.REACT_APP_VIDEO_CDN;
 
 export const API_ENDPOINTS = {
   VIDEOS: `${API_BASE_URL}/api/videos`,

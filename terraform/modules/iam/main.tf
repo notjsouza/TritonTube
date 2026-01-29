@@ -81,7 +81,8 @@ resource "aws_iam_role_policy" "ecs_task_dynamodb" {
           "dynamodb:GetItem",
           "dynamodb:DeleteItem",
           "dynamodb:Scan",
-          "dynamodb:Query"
+          "dynamodb:Query",
+          "dynamodb:UpdateItem"
         ]
         Resource = var.dynamodb_table_arn
       }

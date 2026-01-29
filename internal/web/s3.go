@@ -130,3 +130,11 @@ func GetS3BucketFromEnv() string {
 	}
 	return bucket
 }
+
+func GetS3UploadsBucketFromEnv() string {
+	bucket := os.Getenv("S3_UPLOADS_BUCKET_NAME")
+	if bucket == "" {
+		bucket = "tritontube-uploads" // default fallback
+	}
+	return bucket
+}

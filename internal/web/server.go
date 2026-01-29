@@ -4,6 +4,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"io"
 	"log"
@@ -21,7 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
@@ -346,6 +346,7 @@ type apiVideoResponse struct {
 	UploadedAt   string `json:"uploadedAt"`
 	ManifestUrl  string `json:"manifestUrl"`
 	ThumbnailUrl string `json:"thumbnailUrl"`
+	Status       string `json:"status"` // "processing", "ready", "error"
 }
 
 type apiVideosListResponse struct {
@@ -384,6 +385,7 @@ func (s *server) handleAPIVideos(w http.ResponseWriter, r *http.Request) {
 			UploadedAt:   m.UploadedAt.Format(time.RFC3339),
 			ManifestUrl:  "/content/" + url.PathEscape(m.Id) + "/manifest.mpd",
 			ThumbnailUrl: "/thumbnail/" + url.PathEscape(m.Id),
+			Status:       m.Status,
 		})
 	}
 
@@ -430,6 +432,7 @@ func (s *server) handleAPIVideoDetail(w http.ResponseWriter, r *http.Request) {
 		UploadedAt:   meta.UploadedAt.Format(time.RFC3339),
 		ManifestUrl:  "/content/" + url.PathEscape(meta.Id) + "/manifest.mpd",
 		ThumbnailUrl: "/thumbnail/" + url.PathEscape(meta.Id),
+		Status:       meta.Status,
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
@@ -618,6 +621,40 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 		// Continue anyway to delete metadata
 	}
 
+	// Delete original upload file from uploads bucket if using S3
+	if s3svc, ok := s.contentService.(*S3VideoContentService); ok {
+		uploadBucket := os.Getenv("S3_UPLOAD_BUCKET")
+		if uploadBucket == "" {
+			uploadBucket = "tritontube-uploads"
+		}
+
+		// Delete the entire folder in uploads bucket
+		uploadPrefix := fmt.Sprintf("uploads/%s/", videoId)
+		log.Printf("Deleting upload files from s3://%s/%s", uploadBucket, uploadPrefix)
+
+		listInput := &s3.ListObjectsV2Input{
+			Bucket: aws.String(uploadBucket),
+			Prefix: aws.String(uploadPrefix),
+		}
+
+		listOutput, err := s3svc.client.ListObjectsV2(context.TODO(), listInput)
+		if err != nil {
+			log.Printf("Warning: Failed to list upload files for deletion: %v", err)
+		} else if len(listOutput.Contents) > 0 {
+			for _, obj := range listOutput.Contents {
+				_, err := s3svc.client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+					Bucket: aws.String(uploadBucket),
+					Key:    obj.Key,
+				})
+				if err != nil {
+					log.Printf("Warning: Failed to delete upload file %s: %v", *obj.Key, err)
+				} else {
+					log.Printf("Deleted upload file: %s", *obj.Key)
+				}
+			}
+		}
+	}
+
 	// Delete from metadata database
 	err = s.metadataService.Delete(videoId)
 	if err != nil {
@@ -690,12 +727,21 @@ func (s *server) handleAPIPresignUpload(w http.ResponseWriter, r *http.Request) 
 	s3client := s3.NewFromConfig(cfg)
 	presigner := s3.NewPresignClient(s3client)
 
-	// PutObject presign
-	bucketName := GetS3BucketFromEnv()
+	// PutObject presign - use uploads bucket
+	bucketName := GetS3UploadsBucketFromEnv()
+
+	// Detect content type from filename extension
+	contentType := "application/octet-stream"
+	if strings.HasSuffix(strings.ToLower(body.Filename), ".mp4") {
+		contentType = "video/mp4"
+	} else if strings.HasSuffix(strings.ToLower(body.Filename), ".webm") {
+		contentType = "video/webm"
+	}
+
 	putInput := &s3.PutObjectInput{
-		Bucket: aws.String(bucketName),
-		Key:    aws.String(key),
-		ACL:    s3types.ObjectCannedACLPrivate,
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
 	}
 
 	presignResp, err := presigner.PresignPutObject(context.TODO(), putInput)
@@ -735,16 +781,27 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create metadata entry immediately with "processing" status
+	if err := s.metadataService.CreateWithStatus(body.VideoId, time.Now(), "processing"); err != nil {
+		log.Printf("Failed to create metadata with processing status: %v", err)
+		// Continue anyway - will retry at end
+	}
+
 	// If SQS queue URL is configured, enqueue a message and return immediately
 	queueURL := os.Getenv("SQS_QUEUE_URL")
 	if queueURL != "" {
 		// Build message body
 		msgBody, _ := json.Marshal(map[string]string{"videoId": body.VideoId, "filename": body.Filename})
-		cfg, cfgErr := config.LoadDefaultConfig(context.TODO())
+		// Load AWS config with explicit region
+		awsRegion := os.Getenv("AWS_REGION")
+		if awsRegion == "" {
+			awsRegion = "us-west-1"
+		}
+		cfg, cfgErr := config.LoadDefaultConfig(context.TODO(), config.WithRegion(awsRegion))
 		if cfgErr == nil {
 			sqsClient := sqs.NewFromConfig(cfg)
 			_, sendErr := sqsClient.SendMessage(context.TODO(), &sqs.SendMessageInput{
-				QueueUrl:    &queueURL,
+				QueueUrl:    aws.String(queueURL),
 				MessageBody: aws.String(string(msgBody)),
 			})
 			if sendErr == nil {
@@ -783,7 +840,7 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 		}
 		s3client := s3.NewFromConfig(cfg)
 
-		bucketName := GetS3BucketFromEnv()
+		bucketName := GetS3UploadsBucketFromEnv()
 		getResp, err := s3client.GetObject(context.TODO(), &s3.GetObjectInput{
 			Bucket: aws.String(bucketName),
 			Key:    aws.String(srcKey),
@@ -858,10 +915,10 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Save metadata
-		if err := s.metadataService.Create(videoId, time.Now()); err != nil {
-			log.Printf("Background worker: failed to create metadata: %v", err)
-			return
+		// Update metadata status to ready
+		if err := s.metadataService.UpdateStatus(videoId, "ready"); err != nil {
+			log.Printf("Background worker: failed to update metadata status: %v", err)
+			// Still log completion even if status update fails
 		}
 
 		log.Printf("Background worker: processing completed for %s", videoId)

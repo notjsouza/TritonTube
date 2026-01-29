@@ -14,6 +14,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
@@ -31,6 +33,12 @@ func main() {
 
 	sqsClient := sqs.NewFromConfig(cfg)
 	s3Client := s3.NewFromConfig(cfg)
+	dynamoClient := dynamodb.NewFromConfig(cfg)
+
+	tableName := os.Getenv("METADATA_OPTIONS")
+	if tableName == "" {
+		tableName = "tritontube-video-metadata"
+	}
 
 	for {
 		// Receive messages
@@ -74,12 +82,12 @@ func main() {
 
 				// download from uploads/<videoId>/<filename>
 				srcKey := filepath.Join("uploads", payload.VideoId, payload.Filename)
-				bucketName := os.Getenv("S3_BUCKET_NAME")
-				if bucketName == "" {
-					bucketName = "tritontube-video-content"
+				uploadsBucket := os.Getenv("S3_UPLOADS_BUCKET_NAME")
+				if uploadsBucket == "" {
+					uploadsBucket = "tritontube-uploads"
 				}
 				getResp, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
-					Bucket: &bucketName,
+					Bucket: aws.String(uploadsBucket),
 					Key:    &srcKey,
 				})
 				if err != nil {
@@ -102,17 +110,21 @@ func main() {
 					return
 				}
 
-				// run ffmpeg
+				// run ffmpeg with optimizations for faster processing
 				manifestPath := filepath.Join(tmp, "manifest.mpd")
 				cmd := exec.Command("ffmpeg",
 					"-i", localPath,
 					"-c:v", "libx264",
+					"-preset", "veryfast", // Much faster encoding (was default/medium)
+					"-profile:v", "baseline", // Simpler profile, faster to encode
 					"-c:a", "aac",
 					"-bf", "1",
 					"-keyint_min", "120",
 					"-g", "120",
 					"-sc_threshold", "0",
-					"-b:v", "3000k",
+					"-b:v", "2500k", // Slightly lower bitrate (was 3000k)
+					"-maxrate", "2500k", // Enforce max bitrate
+					"-bufsize", "5000k", // Buffer size for rate control
 					"-b:a", "128k",
 					"-f", "dash",
 					"-use_timeline", "1",
@@ -120,6 +132,7 @@ func main() {
 					"-init_seg_name", "init-$RepresentationID$.m4s",
 					"-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.m4s",
 					"-seg_duration", "4",
+					"-threads", "0", // Use all available CPU cores
 					manifestPath,
 				)
 				cmd.Dir = tmp
@@ -127,6 +140,25 @@ func main() {
 				if err != nil {
 					log.Printf("ffmpeg failed: %v, out: %s", err, string(outb))
 					return
+				}
+
+				// Generate thumbnail from first frame
+				thumbnailPath := filepath.Join(tmp, "thumbnail.jpg")
+				thumbnailCmd := exec.Command("ffmpeg",
+					"-i", localPath,
+					"-vframes", "1", // Extract only 1 frame
+					"-ss", "00:00:02", // At 2 seconds (skip black intro frames)
+					"-vf", "scale=640:-1", // Scale to 640px width, maintain aspect ratio
+					"-q:v", "2", // High quality JPEG (1-31, lower is better)
+					thumbnailPath,
+				)
+				thumbnailCmd.Dir = tmp
+				thumbnailOutput, err := thumbnailCmd.CombinedOutput()
+				if err != nil {
+					log.Printf("Warning: Thumbnail generation failed: %v\nOutput: %s", err, string(thumbnailOutput))
+					// Don't fail the job if thumbnail generation fails
+				} else {
+					log.Printf("Thumbnail generated successfully for video: %s", payload.VideoId)
 				}
 
 				// Upload produced files in tmp directory to final content bucket under <videoId>/
@@ -176,6 +208,27 @@ func main() {
 				}
 
 				log.Printf("Job completed for %s", payload.VideoId)
+
+				// Update DynamoDB metadata status to ready
+				_, err = dynamoClient.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+					TableName: aws.String(tableName),
+					Key: map[string]types.AttributeValue{
+						"id": &types.AttributeValueMemberS{Value: payload.VideoId},
+					},
+					UpdateExpression: aws.String("SET #status = :status"),
+					ExpressionAttributeNames: map[string]string{
+						"#status": "status",
+					},
+					ExpressionAttributeValues: map[string]types.AttributeValue{
+						":status": &types.AttributeValueMemberS{Value: "ready"},
+					},
+				})
+				if err != nil {
+					log.Printf("failed to update metadata status: %v", err)
+					// Still delete the message since processing succeeded
+				} else {
+					log.Printf("Created DynamoDB metadata for %s", payload.VideoId)
+				}
 
 				// delete message after success
 				_, _ = sqsClient.DeleteMessage(context.TODO(), &sqs.DeleteMessageInput{

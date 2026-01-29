@@ -200,10 +200,17 @@ resource "aws_ecs_task_definition" "worker" {
     {
       name  = "${var.project_name}-worker"
   image = var.worker_image != "" ? var.worker_image : var.container_image
+      command = ["./worker"]
 
       environment = [
         { name = "SQS_QUEUE_URL", value = aws_sqs_queue.upload_jobs.id },
-        { name = "S3_BUCKET_NAME", value = var.s3_bucket }
+        { name = "S3_BUCKET_NAME", value = var.s3_bucket },
+        { name = "S3_UPLOADS_BUCKET_NAME", value = var.uploads_bucket },
+        { name = "METADATA_TYPE", value = "dynamodb" },
+        { name = "METADATA_OPTIONS", value = aws_dynamodb_table.video_metadata.name },
+        { name = "CONTENT_TYPE", value = "s3" },
+        { name = "CONTENT_OPTIONS", value = var.s3_bucket },
+        { name = "AWS_REGION", value = data.aws_region.current.name }
       ]
 
       logConfiguration = {
@@ -280,6 +287,18 @@ resource "aws_ecs_task_definition" "main" {
         {
           name  = "CONTENT_OPTIONS"
           value = var.s3_bucket
+        },
+        {
+          name  = "S3_BUCKET_NAME"
+          value = var.s3_bucket
+        },
+        {
+          name  = "S3_UPLOADS_BUCKET_NAME"
+          value = var.uploads_bucket
+        },
+        {
+          name  = "SQS_QUEUE_URL"
+          value = aws_sqs_queue.upload_jobs.id
         },
         {
           name  = "AWS_REGION"

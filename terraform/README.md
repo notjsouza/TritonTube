@@ -100,6 +100,8 @@ project_name = "tritontube"
 environment  = "prod"
 
 # Container image (update after ECR push)
+# Note: Both backend and worker services use the same image
+# Worker uses command override in task definition to run ./worker binary
 container_image = "<account-id>.dkr.ecr.us-west-1.amazonaws.com/tritontube-backend:latest"
 ```
 
@@ -112,7 +114,7 @@ container_memory = 1024  # Memory in MB
 desired_count    = 2     # Number of tasks
 
 # Worker Configuration
-worker_image         = "" # Defaults to <ecr-repo>:worker
+# Worker binary is selected via ECS command override: ["./worker"]
 worker_cpu           = 512
 worker_memory        = 1024
 worker_desired_count = 1
@@ -130,6 +132,8 @@ vpc_cidr = "10.0.0.0/16"
 After infrastructure is created:
 
 ### 1. Build and Push Docker Image
+
+The Dockerfile builds a single image containing both the web API and worker binaries. The worker service uses an ECS command override to run the worker binary.
 
 ```bash
 # Get ECR login
