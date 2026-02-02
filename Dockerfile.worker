@@ -1,0 +1,28 @@
+# Builder stage: compile the Go worker
+FROM golang:1.24 AS builder
+WORKDIR /src
+
+# Download deps first for caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy sources and build
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o /worker ./cmd/worker
+
+# Final image: lightweight base with ffmpeg installed
+FROM ubuntu:22.04
+
+# Install ffmpeg and ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+# Copy worker binary
+COPY --from=builder /worker /usr/local/bin/worker
+
+ENV SQS_QUEUE_URL=""
+ENV S3_BUCKET_NAME=""
+
+ENTRYPOINT ["/usr/local/bin/worker"]

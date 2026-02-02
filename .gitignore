@@ -34,9 +34,20 @@ metadata.db
 deployment-info.txt
 deployment-info.json
 
+# Terraform state files
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+.terraform/
+.terraform.lock.hcl
+
 # AWS CLI artifacts
 aws
 .aws/
+
+# Test/dev storage
+storage/
 
 # dependencies
 /node_modules

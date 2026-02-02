@@ -4,6 +4,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"io"
 	"log"
@@ -15,6 +16,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"context"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
 type server struct {
@@ -49,7 +57,9 @@ func (s *server) Start(lis net.Listener) error {
 	// API endpoints (JSON responses)
 	s.mux.HandleFunc("/api/videos", s.handleAPIVideos)
 	s.mux.HandleFunc("/api/videos/", s.handleAPIVideoDetail)
+	s.mux.HandleFunc("/api/presign-upload", s.handleAPIPresignUpload)
 	s.mux.HandleFunc("/api/upload", s.handleAPIUpload)
+	s.mux.HandleFunc("/api/process", s.handleAPIProcess)
 	s.mux.HandleFunc("/api/delete/", s.handleAPIDelete)
 
 	// Content endpoints (binary responses)
@@ -336,6 +346,7 @@ type apiVideoResponse struct {
 	UploadedAt   string `json:"uploadedAt"`
 	ManifestUrl  string `json:"manifestUrl"`
 	ThumbnailUrl string `json:"thumbnailUrl"`
+	Status       string `json:"status"` // "processing", "ready", "error"
 }
 
 type apiVideosListResponse struct {
@@ -374,6 +385,7 @@ func (s *server) handleAPIVideos(w http.ResponseWriter, r *http.Request) {
 			UploadedAt:   m.UploadedAt.Format(time.RFC3339),
 			ManifestUrl:  "/content/" + url.PathEscape(m.Id) + "/manifest.mpd",
 			ThumbnailUrl: "/thumbnail/" + url.PathEscape(m.Id),
+			Status:       m.Status,
 		})
 	}
 
@@ -420,6 +432,7 @@ func (s *server) handleAPIVideoDetail(w http.ResponseWriter, r *http.Request) {
 		UploadedAt:   meta.UploadedAt.Format(time.RFC3339),
 		ManifestUrl:  "/content/" + url.PathEscape(meta.Id) + "/manifest.mpd",
 		ThumbnailUrl: "/thumbnail/" + url.PathEscape(meta.Id),
+		Status:       meta.Status,
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
@@ -608,6 +621,40 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 		// Continue anyway to delete metadata
 	}
 
+	// Delete original upload file from uploads bucket if using S3
+	if s3svc, ok := s.contentService.(*S3VideoContentService); ok {
+		uploadBucket := os.Getenv("S3_UPLOAD_BUCKET")
+		if uploadBucket == "" {
+			uploadBucket = "tritontube-uploads"
+		}
+
+		// Delete the entire folder in uploads bucket
+		uploadPrefix := fmt.Sprintf("uploads/%s/", videoId)
+		log.Printf("Deleting upload files from s3://%s/%s", uploadBucket, uploadPrefix)
+
+		listInput := &s3.ListObjectsV2Input{
+			Bucket: aws.String(uploadBucket),
+			Prefix: aws.String(uploadPrefix),
+		}
+
+		listOutput, err := s3svc.client.ListObjectsV2(context.TODO(), listInput)
+		if err != nil {
+			log.Printf("Warning: Failed to list upload files for deletion: %v", err)
+		} else if len(listOutput.Contents) > 0 {
+			for _, obj := range listOutput.Contents {
+				_, err := s3svc.client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+					Bucket: aws.String(uploadBucket),
+					Key:    obj.Key,
+				})
+				if err != nil {
+					log.Printf("Warning: Failed to delete upload file %s: %v", *obj.Key, err)
+				} else {
+					log.Printf("Deleted upload file: %s", *obj.Key)
+				}
+			}
+		}
+	}
+
 	// Delete from metadata database
 	err = s.metadataService.Delete(videoId)
 	if err != nil {
@@ -641,4 +688,268 @@ func (s *server) sendJSONError(w http.ResponseWriter, message string, status int
 		Error:   http.StatusText(status),
 		Message: message,
 	})
+}
+
+// ---- New endpoints: presign-upload and process ----
+
+// handleAPIPresignUpload returns a presigned PUT URL for direct S3 upload.
+// Request: POST with JSON { "videoId": "my-video-id", "filename": "my.mp4" }
+// Response: { "url": "https://...", "headers": {} }
+func (s *server) handleAPIPresignUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.sendJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		VideoId  string `json:"videoId"`
+		Filename string `json:"filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.VideoId == "" || body.Filename == "" {
+		s.sendJSONError(w, "videoId and filename are required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if video already exists to prevent race conditions
+	existingMeta, err := s.metadataService.Read(body.VideoId)
+	if err != nil {
+		log.Printf("Warning: Failed to check existing video metadata: %v", err)
+		// Continue anyway - better to allow upload than block on metadata check failure
+	} else if existingMeta != nil {
+		log.Printf("Upload rejected: video ID '%s' already exists with status '%s'", body.VideoId, existingMeta.Status)
+		s.sendJSONError(w, fmt.Sprintf("video ID '%s' already exists - please delete the existing video first or use a different ID", body.VideoId), http.StatusConflict)
+		return
+	}
+
+	// Build S3 key under uploads/ prefix to separate raw uploads
+	key := filepath.Join("uploads", body.VideoId, body.Filename)
+
+	// Use AWS SDK v2 to create a presigned PUT URL
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		log.Printf("Failed to load AWS config for presign: %v", err)
+		s.sendJSONError(w, "failed to create presigned url", http.StatusInternalServerError)
+		return
+	}
+	s3client := s3.NewFromConfig(cfg)
+	presigner := s3.NewPresignClient(s3client)
+
+	// PutObject presign - use uploads bucket
+	bucketName := GetS3UploadsBucketFromEnv()
+
+	// Detect content type from filename extension
+	contentType := "application/octet-stream"
+	if strings.HasSuffix(strings.ToLower(body.Filename), ".mp4") {
+		contentType = "video/mp4"
+	} else if strings.HasSuffix(strings.ToLower(body.Filename), ".webm") {
+		contentType = "video/webm"
+	}
+
+	putInput := &s3.PutObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
+	}
+
+	presignResp, err := presigner.PresignPutObject(context.TODO(), putInput)
+	if err != nil {
+		log.Printf("Failed to presign PUT object: %v", err)
+		s.sendJSONError(w, "failed to create presigned url", http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"url":    presignResp.URL,
+		"method": "PUT",
+		"key":    key,
+	}
+	s.sendJSON(w, resp, http.StatusOK)
+}
+
+// handleAPIProcess accepts a notification from the client after a direct S3 upload
+// and enqueues processing (here we'll spawn a goroutine as a simple worker for dev).
+// Request: POST { "videoId": "...", "filename": "..." }
+func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.sendJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		VideoId  string `json:"videoId"`
+		Filename string `json:"filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.VideoId == "" || body.Filename == "" {
+		s.sendJSONError(w, "videoId and filename are required", http.StatusBadRequest)
+		return
+	}
+
+	// Create metadata entry immediately with "processing" status
+	if err := s.metadataService.CreateWithStatus(body.VideoId, time.Now(), "processing"); err != nil {
+		log.Printf("ERROR: Failed to create metadata with processing status for '%s': %v", body.VideoId, err)
+		log.Printf("This may indicate a race condition - video might already exist or be processing")
+		// Check if it already exists
+		existingMeta, readErr := s.metadataService.Read(body.VideoId)
+		if readErr == nil && existingMeta != nil {
+			log.Printf("Confirmed: Video '%s' already exists with status '%s', uploadedAt: %v", body.VideoId, existingMeta.Status, existingMeta.UploadedAt)
+			s.sendJSONError(w, fmt.Sprintf("video '%s' already exists or is being processed", body.VideoId), http.StatusConflict)
+			return
+		}
+		// If we can't read it either, there's a bigger problem - fail the request
+		log.Printf("CRITICAL: Cannot create or read metadata for '%s' - rejecting processing request", body.VideoId)
+		s.sendJSONError(w, "failed to initialize video processing - please try again or use a different video ID", http.StatusInternalServerError)
+		return
+	}
+
+	// If SQS queue URL is configured, enqueue a message and return immediately
+	queueURL := os.Getenv("SQS_QUEUE_URL")
+	if queueURL != "" {
+		// Build message body
+		msgBody, _ := json.Marshal(map[string]string{"videoId": body.VideoId, "filename": body.Filename})
+		// Load AWS config with explicit region
+		awsRegion := os.Getenv("AWS_REGION")
+		if awsRegion == "" {
+			awsRegion = "us-west-1"
+		}
+		cfg, cfgErr := config.LoadDefaultConfig(context.TODO(), config.WithRegion(awsRegion))
+		if cfgErr == nil {
+			sqsClient := sqs.NewFromConfig(cfg)
+			_, sendErr := sqsClient.SendMessage(context.TODO(), &sqs.SendMessageInput{
+				QueueUrl:    aws.String(queueURL),
+				MessageBody: aws.String(string(msgBody)),
+			})
+			if sendErr == nil {
+				// Enqueued successfully
+				resp := map[string]interface{}{
+					"status":  "enqueued",
+					"videoId": body.VideoId,
+				}
+				s.sendJSON(w, resp, http.StatusAccepted)
+				return
+			}
+			log.Printf("Failed to send SQS message: %v", sendErr)
+		} else {
+			log.Printf("Failed to load AWS config for SQS send: %v", cfgErr)
+		}
+		// If SQS send failed, fall back to in-process worker
+	}
+
+	// Launch background goroutine to download the uploaded file from uploads/ and run processing
+	go func(videoId, filename string) {
+		// Create temp dir for processing
+		tmp, err := os.MkdirTemp("", "proc-*")
+		if err != nil {
+			log.Printf("Background worker: failed to create temp dir: %v", err)
+			return
+		}
+		defer os.RemoveAll(tmp)
+
+		// Download the uploaded file from S3 (uploads/<videoId>/<filename>) into tmp
+		srcKey := filepath.Join("uploads", videoId, filename)
+
+		cfg, err := config.LoadDefaultConfig(context.TODO())
+		if err != nil {
+			log.Printf("Background worker: failed to load AWS config: %v", err)
+			return
+		}
+		s3client := s3.NewFromConfig(cfg)
+
+		bucketName := GetS3UploadsBucketFromEnv()
+		getResp, err := s3client.GetObject(context.TODO(), &s3.GetObjectInput{
+			Bucket: aws.String(bucketName),
+			Key:    aws.String(srcKey),
+		})
+		if err != nil {
+			log.Printf("Background worker: failed to download uploaded file %s: %v", srcKey, err)
+			return
+		}
+		defer getResp.Body.Close()
+
+		localPath := filepath.Join(tmp, filename)
+		out, err := os.Create(localPath)
+		if err != nil {
+			log.Printf("Background worker: failed to create local file: %v", err)
+			return
+		}
+		_, err = io.Copy(out, getResp.Body)
+		out.Close()
+		if err != nil {
+			log.Printf("Background worker: failed to write local file: %v", err)
+			return
+		}
+
+		// Run FFmpeg to produce DASH segments into tmp
+		manifestPath := filepath.Join(tmp, "manifest.mpd")
+		cmd := exec.Command("ffmpeg",
+			"-i", localPath,
+			"-c:v", "libx264",
+			"-c:a", "aac",
+			"-bf", "1",
+			"-keyint_min", "120",
+			"-g", "120",
+			"-sc_threshold", "0",
+			"-b:v", "3000k",
+			"-b:a", "128k",
+			"-f", "dash",
+			"-use_timeline", "1",
+			"-use_template", "1",
+			"-init_seg_name", "init-$RepresentationID$.m4s",
+			"-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.m4s",
+			"-seg_duration", "4",
+			manifestPath,
+		)
+		cmd.Dir = tmp
+		outb, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Printf("Background worker: ffmpeg failed: %v, output: %s", err, string(outb))
+			return
+		}
+
+		// Upload generated files to final video location using s.contentService.Write
+		files, err := os.ReadDir(tmp)
+		if err != nil {
+			log.Printf("Background worker: readdir failed: %v", err)
+			return
+		}
+		for _, f := range files {
+			if f.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(f.Name(), ".mp4") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(tmp, f.Name()))
+			if err != nil {
+				log.Printf("Background worker: read file failed: %v", err)
+				return
+			}
+			if err := s.contentService.Write(videoId, f.Name(), data); err != nil {
+				log.Printf("Background worker: write to content service failed: %v", err)
+				return
+			}
+		}
+
+		// Update metadata status to ready
+		if err := s.metadataService.UpdateStatus(videoId, "ready"); err != nil {
+			log.Printf("Background worker: failed to update metadata status: %v", err)
+			// Still log completion even if status update fails
+		}
+
+		log.Printf("Background worker: processing completed for %s", videoId)
+	}(body.VideoId, body.Filename)
+
+	// Respond immediately
+	resp := map[string]interface{}{
+		"status":  "processing_started",
+		"videoId": body.VideoId,
+	}
+	s.sendJSON(w, resp, http.StatusAccepted)
 }

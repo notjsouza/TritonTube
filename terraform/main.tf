@@ -36,14 +36,6 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# IAM Module
-module "iam" {
-  source = "./modules/iam"
-
-  project_name = var.project_name
-  environment  = var.environment
-}
-
 # Networking Module
 module "networking" {
   source = "./modules/networking"
@@ -62,6 +54,20 @@ module "s3" {
   environment  = var.environment
 }
 
+# IAM Module - Must come after S3 but before ECS
+module "iam" {
+  source = "./modules/iam"
+
+  project_name         = var.project_name
+  environment          = var.environment
+  # These will be passed from ECS outputs, but IAM policies reference them by name pattern
+  # The actual resources are created in ECS module, but IAM needs to know about them
+  dynamodb_table_arn   = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-video-metadata"
+  sqs_queue_arn        = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${var.project_name}-upload-jobs"
+  s3_bucket_name       = module.s3.video_bucket_name
+  uploads_bucket_name  = module.s3.uploads_bucket_name
+}
+
 # CloudFront Module
 module "cloudfront" {
   source = "./modules/cloudfront"
@@ -71,21 +77,6 @@ module "cloudfront" {
   video_bucket_domain_name  = module.s3.video_bucket_regional_domain_name
   video_bucket_id           = module.s3.video_bucket_id
   frontend_bucket_website   = module.s3.frontend_bucket_website_endpoint
-}
-
-# RDS Module
-module "rds" {
-  source = "./modules/rds"
-
-  project_name           = var.project_name
-  environment            = var.environment
-  vpc_id                 = module.networking.vpc_id
-  database_subnet_ids    = module.networking.database_subnet_ids
-  db_subnet_group_name   = module.networking.db_subnet_group_name
-  ecs_security_group_id  = module.ecs.ecs_task_security_group_id
-  db_username            = var.db_username
-  db_password            = var.db_password
-  db_instance_class      = var.db_instance_class
 }
 
 # ECS Module
@@ -107,7 +98,11 @@ module "ecs" {
   desired_count              = var.desired_count
   
   # Environment variables for container
-  db_connection_string       = "postgres://${var.db_username}:${var.db_password}@${module.rds.db_endpoint}/${var.db_name}"
   s3_bucket                  = module.s3.video_bucket_id
+  uploads_bucket             = module.s3.uploads_bucket_id
+  worker_image               = var.worker_image
+  worker_cpu                 = var.worker_cpu
+  worker_memory              = var.worker_memory
+  worker_desired_count       = var.worker_desired_count
   cdn_domain                 = module.cloudfront.video_cdn_domain
 }

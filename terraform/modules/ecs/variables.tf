@@ -56,15 +56,38 @@ variable "desired_count" {
   default     = 2
 }
 
-variable "db_connection_string" {
-  description = "Database connection string"
-  type        = string
-  sensitive   = true
-}
-
 variable "s3_bucket" {
   description = "S3 bucket name for video storage"
   type        = string
+}
+
+variable "uploads_bucket" {
+  description = "S3 bucket name for uploads (temporary)"
+  type        = string
+}
+
+variable "worker_image" {
+  description = "Docker image for the worker container"
+  type        = string
+  default     = ""
+}
+
+variable "worker_cpu" {
+  description = "CPU units for worker task"
+  type        = number
+  default     = 512
+}
+
+variable "worker_memory" {
+  description = "Memory (MB) for worker task"
+  type        = number
+  default     = 1024
+}
+
+variable "worker_desired_count" {
+  description = "Desired number of worker tasks"
+  type        = number
+  default     = 1
 }
 
 variable "cdn_domain" {

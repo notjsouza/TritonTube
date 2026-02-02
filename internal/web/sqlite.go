@@ -27,7 +27,8 @@ func NewSQLiteVideoMetadataService(dbPath string) (*SQLiteVideoMetadataService, 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS video_metadata (
 			video_id TEXT PRIMARY KEY,
-			uploaded_at DATETIME
+			uploaded_at DATETIME,
+			status TEXT DEFAULT 'ready'
 		)
 	`)
 
@@ -39,9 +40,13 @@ func NewSQLiteVideoMetadataService(dbPath string) (*SQLiteVideoMetadataService, 
 }
 
 func (s *SQLiteVideoMetadataService) Create(videoId string, uploadedAt time.Time) error {
+	return s.CreateWithStatus(videoId, uploadedAt, "ready")
+}
+
+func (s *SQLiteVideoMetadataService) CreateWithStatus(videoId string, uploadedAt time.Time, status string) error {
 	_, err := s.db.Exec(
-		"INSERT INTO video_metadata (video_id, uploaded_at) VALUES (?, ?)",
-		videoId, uploadedAt,
+		"INSERT INTO video_metadata (video_id, uploaded_at, status) VALUES (?, ?, ?)",
+		videoId, uploadedAt, status,
 	)
 
 	if err != nil {
@@ -55,8 +60,16 @@ func (s *SQLiteVideoMetadataService) Create(videoId string, uploadedAt time.Time
 	return nil
 }
 
+func (s *SQLiteVideoMetadataService) UpdateStatus(videoId string, status string) error {
+	_, err := s.db.Exec(
+		"UPDATE video_metadata SET status = ? WHERE video_id = ?",
+		status, videoId,
+	)
+	return err
+}
+
 func (s *SQLiteVideoMetadataService) List() ([]VideoMetadata, error) {
-	rows, err := s.db.Query("SELECT video_id, uploaded_at FROM video_metadata ORDER BY uploaded_at DESC")
+	rows, err := s.db.Query("SELECT video_id, uploaded_at, COALESCE(status, 'ready') FROM video_metadata ORDER BY uploaded_at DESC")
 
 	if err != nil {
 		return nil, err
@@ -66,7 +79,7 @@ func (s *SQLiteVideoMetadataService) List() ([]VideoMetadata, error) {
 	var result []VideoMetadata
 	for rows.Next() {
 		var v VideoMetadata
-		if err := rows.Scan(&v.Id, &v.UploadedAt); err != nil {
+		if err := rows.Scan(&v.Id, &v.UploadedAt, &v.Status); err != nil {
 			return nil, err
 		}
 		result = append(result, v)
@@ -76,10 +89,10 @@ func (s *SQLiteVideoMetadataService) List() ([]VideoMetadata, error) {
 }
 
 func (s *SQLiteVideoMetadataService) Read(videoId string) (*VideoMetadata, error) {
-	row := s.db.QueryRow("SELECT video_id, uploaded_at FROM video_metadata WHERE video_id = ?", videoId)
+	row := s.db.QueryRow("SELECT video_id, uploaded_at, COALESCE(status, 'ready') FROM video_metadata WHERE video_id = ?", videoId)
 
 	var v VideoMetadata
-	if err := row.Scan(&v.Id, &v.UploadedAt); err != nil {
+	if err := row.Scan(&v.Id, &v.UploadedAt, &v.Status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

@@ -27,6 +27,7 @@ resource "aws_cloudfront_distribution" "video_content" {
 
     forwarded_values {
       query_string = false
+      headers = ["Origin"]
       cookies {
         forward = "none"
       }

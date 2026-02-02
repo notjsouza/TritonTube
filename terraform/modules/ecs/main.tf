@@ -152,6 +152,103 @@ resource "aws_lb_listener" "http" {
   }
 }
 
+# Simple SQS queue for upload processing jobs
+resource "aws_sqs_queue" "upload_jobs" {
+  name                      = "${var.project_name}-upload-jobs"
+  delay_seconds             = 0
+  visibility_timeout_seconds = 1800 # 30 minutes to allow long processing
+  message_retention_seconds = 1209600 # 14 days
+  receive_wait_time_seconds = 20
+
+  tags = {
+    Name = "${var.project_name}-upload-jobs"
+  }
+}
+
+# IAM role and policy for ECS tasks (allows SQS SendMessage for API and SQS Receive/Delete + S3 access for worker)
+# DynamoDB Table for video metadata
+resource "aws_dynamodb_table" "video_metadata" {
+  name           = "${var.project_name}-video-metadata"
+  billing_mode   = "PAY_PER_REQUEST" # On-demand pricing
+  hash_key       = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+
+  tags = {
+    Name = "${var.project_name}-video-metadata"
+  }
+}
+
+/*
+  Worker ECS task & service: lightweight task that runs the `worker` image (same ECR repo) and polls SQS.
+  This is created as a separate task definition & service but reuses the cluster and log group.
+*/
+
+resource "aws_ecs_task_definition" "worker" {
+  family                   = "${var.project_name}-worker"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = var.worker_cpu
+  memory                   = var.worker_memory
+  execution_role_arn       = var.task_execution_role_arn
+  task_role_arn            = var.task_role_arn
+
+  container_definitions = jsonencode([
+    {
+      name  = "${var.project_name}-worker"
+  image = var.worker_image != "" ? var.worker_image : var.container_image
+      command = ["./worker"]
+
+      environment = [
+        { name = "SQS_QUEUE_URL", value = aws_sqs_queue.upload_jobs.id },
+        { name = "S3_BUCKET_NAME", value = var.s3_bucket },
+        { name = "S3_UPLOADS_BUCKET_NAME", value = var.uploads_bucket },
+        { name = "METADATA_TYPE", value = "dynamodb" },
+        { name = "METADATA_OPTIONS", value = aws_dynamodb_table.video_metadata.name },
+        { name = "CONTENT_TYPE", value = "s3" },
+        { name = "CONTENT_OPTIONS", value = var.s3_bucket },
+        { name = "AWS_REGION", value = data.aws_region.current.name }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.ecs.name
+          "awslogs-region"        = data.aws_region.current.name
+          "awslogs-stream-prefix" = "worker"
+        }
+      }
+
+      essential = true
+    }
+  ])
+
+  tags = {
+    Name = "${var.project_name}-worker-task"
+  }
+}
+
+resource "aws_ecs_service" "worker" {
+  name            = "${var.project_name}-worker"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.worker.arn
+  desired_count   = var.worker_desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = false
+  }
+
+  tags = {
+    Name = "${var.project_name}-worker"
+  }
+}
+
 # ECS Task Definition
 resource "aws_ecs_task_definition" "main" {
   family                   = "${var.project_name}-backend"
@@ -177,11 +274,11 @@ resource "aws_ecs_task_definition" "main" {
       environment = [
         {
           name  = "METADATA_TYPE"
-          value = "postgres"
+          value = "dynamodb"
         },
         {
           name  = "METADATA_OPTIONS"
-          value = var.db_connection_string
+          value = aws_dynamodb_table.video_metadata.name
         },
         {
           name  = "CONTENT_TYPE"
@@ -190,6 +287,18 @@ resource "aws_ecs_task_definition" "main" {
         {
           name  = "CONTENT_OPTIONS"
           value = var.s3_bucket
+        },
+        {
+          name  = "S3_BUCKET_NAME"
+          value = var.s3_bucket
+        },
+        {
+          name  = "S3_UPLOADS_BUCKET_NAME"
+          value = var.uploads_bucket
+        },
+        {
+          name  = "SQS_QUEUE_URL"
+          value = aws_sqs_queue.upload_jobs.id
         },
         {
           name  = "AWS_REGION"

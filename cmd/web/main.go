@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"tritontube/internal/proto"
 	"tritontube/internal/web"
@@ -16,15 +17,16 @@ func printUsage() {
 	fmt.Println("Usage: ./program [OPTIONS] METADATA_TYPE METADATA_OPTIONS CONTENT_TYPE CONTENT_OPTIONS")
 	fmt.Println()
 	fmt.Println("Arguments:")
-	fmt.Println("  METADATA_TYPE         Metadata service type (sqlite, etcd)")
-	fmt.Println("  METADATA_OPTIONS      Options for metadata service (e.g., db path)")
-	fmt.Println("  CONTENT_TYPE          Content service type (fs, nw)")
-	fmt.Println("  CONTENT_OPTIONS       Options for content service (e.g., base dir, network addresses)")
+	fmt.Println("  METADATA_TYPE         Metadata service type (sqlite, dynamodb)")
+	fmt.Println("  METADATA_OPTIONS      Options for metadata service (e.g., db path or DynamoDB table name)")
+	fmt.Println("  CONTENT_TYPE          Content service type (fs, nw, s3)")
+	fmt.Println("  CONTENT_OPTIONS       Options for content service (e.g., base dir, network addresses, or S3 bucket)")
 	fmt.Println()
 	fmt.Println("Options:")
 	flag.PrintDefaults()
 	fmt.Println()
-	fmt.Println("Example: ./program sqlite db.db fs /path/to/videos")
+	fmt.Println("Example: ./program sqlite db.db s3 my-bucket")
+	fmt.Println("Example: ./program dynamodb my-table s3 my-bucket")
 }
 
 func main() {
@@ -39,18 +41,30 @@ func main() {
 	// Parse flags
 	flag.Parse()
 
-	// Check if the correct number of positional arguments is provided
-	if len(flag.Args()) != 4 {
-		fmt.Println("Error: Incorrect number of arguments")
-		printUsage()
-		return
-	}
+	// Get configuration from command-line arguments or environment variables
+	var metadataServiceType, metadataServiceOptions, contentServiceType, contentServiceOptions string
 
-	// Parse positional arguments
-	metadataServiceType := flag.Arg(0)
-	metadataServiceOptions := flag.Arg(1)
-	contentServiceType := flag.Arg(2)
-	contentServiceOptions := flag.Arg(3)
+	if len(flag.Args()) == 4 {
+		// Use command-line arguments
+		metadataServiceType = flag.Arg(0)
+		metadataServiceOptions = flag.Arg(1)
+		contentServiceType = flag.Arg(2)
+		contentServiceOptions = flag.Arg(3)
+	} else {
+		// Fall back to environment variables
+		metadataServiceType = os.Getenv("METADATA_TYPE")
+		metadataServiceOptions = os.Getenv("METADATA_OPTIONS")
+		contentServiceType = os.Getenv("CONTENT_TYPE")
+		contentServiceOptions = os.Getenv("CONTENT_OPTIONS")
+
+		// Validate that environment variables are set
+		if metadataServiceType == "" || contentServiceType == "" {
+			fmt.Println("Error: Configuration must be provided via command-line arguments or environment variables")
+			fmt.Println("Required environment variables: METADATA_TYPE, METADATA_OPTIONS, CONTENT_TYPE, CONTENT_OPTIONS")
+			printUsage()
+			return
+		}
+	}
 
 	// Validate port number (already an int from flag, check if positive)
 	if *port <= 0 {
@@ -71,11 +85,11 @@ func main() {
 			fmt.Printf("Error creating SQLite metadata service: %v\n", err)
 			return
 		}
-	case "postgres":
+	case "dynamodb":
 		var err error
-		metadataService, err = web.NewPostgresVideoMetadataService(metadataServiceOptions)
+		metadataService, err = web.NewDynamoDBVideoMetadataService(metadataServiceOptions)
 		if err != nil {
-			fmt.Printf("Error creating PostgreSQL metadata service: %v\n", err)
+			fmt.Printf("Error creating DynamoDB metadata service: %v\n", err)
 			return
 		}
 	default:

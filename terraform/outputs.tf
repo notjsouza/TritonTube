@@ -1,3 +1,7 @@
+output "frontend_cdn_id" {
+  description = "CloudFront distribution ID for frontend"
+  value       = module.cloudfront.frontend_cdn_id
+}
 output "vpc_id" {
   description = "ID of the VPC"
   value       = module.networking.vpc_id
@@ -43,12 +47,6 @@ output "api_endpoint" {
   value       = "http://${module.ecs.alb_dns_name}"
 }
 
-output "rds_endpoint" {
-  description = "RDS instance endpoint"
-  value       = module.rds.db_endpoint
-  sensitive   = true
-}
-
 output "ecs_cluster_name" {
   description = "Name of the ECS cluster"
   value       = module.ecs.cluster_name
@@ -57,6 +55,16 @@ output "ecs_cluster_name" {
 output "ecr_repository_url" {
   description = "ECR repository URL for backend image"
   value       = module.ecs.ecr_repository_url
+}
+
+output "sqs_upload_queue_url" {
+  description = "SQS queue URL for upload processing jobs"
+  value       = module.ecs.upload_queue_url
+}
+
+output "sqs_upload_queue_arn" {
+  description = "SQS queue ARN for upload processing jobs"
+  value       = module.ecs.upload_queue_arn
 }
 
 output "deployment_summary" {

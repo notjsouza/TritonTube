@@ -16,25 +16,24 @@ terraform/
     ├── cloudfront/            # CDN distributions
     ├── networking/            # VPC, subnets, NAT gateways
     ├── iam/                   # IAM roles and policies
-    ├── rds/                   # PostgreSQL database
-    └── ecs/                   # ECS cluster, ALB, auto-scaling
+    └── ecs/                   # ECS cluster, ALB, DynamoDB, auto-scaling
 ```
 
-## 🎯 What Gets Created
+## What Gets Created
 
 This Terraform configuration creates:
 
 - **Networking**: VPC with public/private subnets across 2 AZs
 - **Storage**: 3 S3 buckets (video content, frontend, uploads)
 - **CDN**: 2 CloudFront distributions (video + frontend)
-- **Database**: RDS PostgreSQL instance (Multi-AZ capable)
+- **Database**: DynamoDB table for metadata (serverless)
 - **Compute**: ECS Fargate cluster with auto-scaling
 - **Load Balancing**: Application Load Balancer
 - **Container Registry**: ECR repository for Docker images
 - **IAM**: Roles and policies for ECS tasks
 - **Monitoring**: CloudWatch logs and metrics
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Prerequisites
 
@@ -62,8 +61,7 @@ terraform init
 # Copy example file
 cp terraform.tfvars.example terraform.tfvars
 
-# Edit with your values
-# IMPORTANT: Change the db_password!
+# Edit with your container image URL after pushing to ECR
 ```
 
 ### 4. Review Plan
@@ -82,15 +80,15 @@ terraform apply
 # Type 'yes' to confirm
 ```
 
-## ⏱️ Deployment Time
+## Deployment Time
 
-- Initial deployment: **~15-20 minutes**
+- Initial deployment: **~8-10 minutes**
   - VPC & Networking: ~2 min
-  - RDS Database: ~10 min (longest)
+  - DynamoDB Table: ~1 min
   - S3 & CloudFront: ~3 min
   - ECS & ALB: ~3 min
 
-## 📝 Configuration
+## Configuration
 
 ### Required Variables
 
@@ -101,12 +99,9 @@ aws_region   = "us-west-1"
 project_name = "tritontube"
 environment  = "prod"
 
-# Database (CHANGE PASSWORD!)
-db_username = "admin"
-db_password = "YOUR_STRONG_PASSWORD_HERE"
-db_name     = "tritontube"
-
 # Container image (update after ECR push)
+# Note: Both backend and worker services use the same image
+# Worker uses command override in task definition to run ./worker binary
 container_image = "<account-id>.dkr.ecr.us-west-1.amazonaws.com/tritontube-backend:latest"
 ```
 
@@ -118,12 +113,15 @@ container_cpu    = 512   # CPU units (1024 = 1 vCPU)
 container_memory = 1024  # Memory in MB
 desired_count    = 2     # Number of tasks
 
+# Worker Configuration
+# Worker binary is selected via ECS command override: ["./worker"]
+worker_cpu           = 512
+worker_memory        = 1024
+worker_desired_count = 1
+
 # Auto Scaling
 min_capacity = 2
 max_capacity = 10
-
-# Database
-db_instance_class = "db.t3.micro"
 
 # Networking
 vpc_cidr = "10.0.0.0/16"
@@ -134,6 +132,8 @@ vpc_cidr = "10.0.0.0/16"
 After infrastructure is created:
 
 ### 1. Build and Push Docker Image
+
+The Dockerfile builds a single image containing both the web API and worker binaries. The worker service uses an ECS command override to run the worker binary.
 
 ```bash
 # Get ECR login
@@ -269,13 +269,13 @@ aws dynamodb create-table \
 
 ## 🔐 Security Best Practices
 
-1. **Never commit `terraform.tfvars`** - contains sensitive data
-2. **Use strong database passwords** - minimum 16 characters
+1. **Never commit `terraform.tfvars`** - contains configuration values
+2. **Never commit `*.tfstate` files** - contain infrastructure details
 3. **Enable MFA** on AWS account
 4. **Use IAM roles** instead of access keys when possible
 5. **Review security groups** before opening to public
 6. **Enable CloudTrail** for audit logging
-7. **Use AWS Secrets Manager** for production passwords
+7. **Use remote state** (S3) for team collaboration
 
 ## 💰 Cost Optimization
 
@@ -283,18 +283,15 @@ aws dynamodb create-table \
 
 ```hcl
 # terraform.tfvars
-db_instance_class = "db.t3.micro"  # ~$15/month
 desired_count     = 1              # Instead of 2
 container_cpu     = 256            # Instead of 512
 container_memory  = 512            # Instead of 1024
+worker_desired_count = 0           # Disable workers if not needed
 ```
 
 ### Stop Resources When Not in Use
 
 ```bash
-# Stop RDS (saves ~$10/day)
-aws rds stop-db-instance --db-instance-identifier tritontube-db
-
 # Scale ECS to 0
 aws ecs update-service \
   --cluster tritontube-cluster \

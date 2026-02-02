@@ -56,9 +56,58 @@ resource "aws_iam_role_policy" "ecs_task_s3" {
           "s3:ListBucket"
         ]
         Resource = [
-          "arn:aws:s3:::${var.project_name}-*/*",
-          "arn:aws:s3:::${var.project_name}-*"
+          "arn:aws:s3:::${var.s3_bucket_name}",
+          "arn:aws:s3:::${var.s3_bucket_name}/*",
+          "arn:aws:s3:::${var.uploads_bucket_name}",
+          "arn:aws:s3:::${var.uploads_bucket_name}/*"
         ]
+      }
+    ]
+  })
+}
+
+# Policy for DynamoDB access
+resource "aws_iam_role_policy" "ecs_task_dynamodb" {
+  name = "${var.project_name}-ecs-task-dynamodb-policy"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan",
+          "dynamodb:Query",
+          "dynamodb:UpdateItem"
+        ]
+        Resource = var.dynamodb_table_arn
+      }
+    ]
+  })
+}
+
+# Policy for SQS access
+resource "aws_iam_role_policy" "ecs_task_sqs" {
+  name = "${var.project_name}-ecs-task-sqs-policy"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage",
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:ChangeMessageVisibility"
+        ]
+        Resource = var.sqs_queue_arn
       }
     ]
   })
