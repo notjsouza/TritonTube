@@ -217,7 +217,7 @@ echo ""
 
 # Get final URLs
 cd terraform
-FRONTEND_URL=$(terraform output -raw frontend_cdn_url 2>/dev/null)
+FRONTEND_URL=$(terraform output -raw frontend_cdn_domain 2>/dev/null)
 VIDEO_CDN=$(terraform output -raw video_cdn_domain 2>/dev/null)
 cd ..
 
@@ -230,7 +230,7 @@ echo ""
 echo "Architecture:"
 echo "   ECS Fargate with 3 tasks"
 echo "   Application Load Balancer (600s timeout)"
-echo "   PostgreSQL RDS (metadata storage)"
+echo "   DynamoDB (metadata storage)"
 echo "   S3 (video content storage)"
 echo "   CloudFront (CDN for videos and frontend)"
 echo ""
