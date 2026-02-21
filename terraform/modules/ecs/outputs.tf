@@ -48,6 +48,16 @@ output "upload_queue_arn" {
   value       = aws_sqs_queue.upload_jobs.arn
 }
 
+output "upload_dlq_url" {
+  description = "SQS dead-letter queue URL for failed upload jobs"
+  value       = aws_sqs_queue.upload_jobs_dlq.id
+}
+
+output "upload_dlq_arn" {
+  description = "SQS dead-letter queue ARN for failed upload jobs"
+  value       = aws_sqs_queue.upload_jobs_dlq.arn
+}
+
 output "dynamodb_table_name" {
   description = "Name of the DynamoDB table for video metadata"
   value       = aws_dynamodb_table.video_metadata.name

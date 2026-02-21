@@ -85,9 +85,27 @@ variable "worker_memory" {
 }
 
 variable "worker_desired_count" {
-  description = "Desired number of worker tasks"
+  description = "Initial desired number of worker tasks"
   type        = number
-  default     = 1
+  default     = 0
+}
+
+variable "worker_min_count" {
+  description = "Minimum number of worker tasks (0 = scale to zero when queue is empty)"
+  type        = number
+  default     = 0
+}
+
+variable "worker_max_count" {
+  description = "Maximum number of worker tasks"
+  type        = number
+  default     = 5
+}
+
+variable "enable_autoscaling" {
+  description = "Whether to create worker autoscaling resources (target, alarms, policies)"
+  type        = bool
+  default     = true
 }
 
 variable "cdn_domain" {

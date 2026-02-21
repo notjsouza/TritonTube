@@ -64,6 +64,7 @@ module "iam" {
   # The actual resources are created in ECS module, but IAM needs to know about them
   dynamodb_table_arn   = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-video-metadata"
   sqs_queue_arn        = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${var.project_name}-upload-jobs"
+  sqs_dlq_arn          = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${var.project_name}-upload-jobs-dlq"
   s3_bucket_name       = module.s3.video_bucket_name
   uploads_bucket_name  = module.s3.uploads_bucket_name
 }
@@ -104,5 +105,8 @@ module "ecs" {
   worker_cpu                 = var.worker_cpu
   worker_memory              = var.worker_memory
   worker_desired_count       = var.worker_desired_count
+  worker_min_count           = var.worker_min_count
+  worker_max_count           = var.worker_max_count
+  enable_autoscaling         = var.enable_autoscaling
   cdn_domain                 = module.cloudfront.video_cdn_domain
 }

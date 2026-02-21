@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -60,7 +60,7 @@ func (s *S3VideoContentService) Write(videoId, filename string, data []byte) err
 		return fmt.Errorf("failed to upload to S3: %w", err)
 	}
 
-	log.Printf("Uploaded %s to S3: s3://%s/%s", filename, s.bucketName, key)
+	slog.Info("uploaded to S3", "filename", filename, "bucket", s.bucketName, "key", key)
 	return nil
 }
 
@@ -108,9 +108,9 @@ func (s *S3VideoContentService) DeleteAll(videoId string) error {
 		})
 
 		if err != nil {
-			log.Printf("Warning: failed to delete %s: %v", *obj.Key, err)
+			slog.Warn("failed to delete S3 object", "bucket", s.bucketName, "key", *obj.Key, "error", err)
 		} else {
-			log.Printf("Deleted from S3: s3://%s/%s", s.bucketName, *obj.Key)
+			slog.Info("deleted from S3", "bucket", s.bucketName, "key", *obj.Key)
 		}
 	}
 

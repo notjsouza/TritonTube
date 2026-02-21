@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"tritontube/internal/proto"
 
@@ -21,7 +21,8 @@ func main() {
 
 	conn, err := grpc.NewClient(serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("Failed to connect to server: %v", err)
+		slog.Error("failed to connect to server", "addr", serverAddr, "error", err)
+		os.Exit(1)
 	}
 	defer conn.Close()
 
@@ -67,7 +68,8 @@ func addNode(client proto.VideoContentAdminServiceClient, nodeAddr string) {
 		NodeAddress: nodeAddr,
 	})
 	if err != nil {
-		log.Fatalf("AddNode RPC failed: %v", err)
+		slog.Error("AddNode RPC failed", "node", nodeAddr, "error", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("Successfully added node: %s\n", nodeAddr)
@@ -81,7 +83,8 @@ func removeNode(client proto.VideoContentAdminServiceClient, nodeAddr string) {
 		NodeAddress: nodeAddr,
 	})
 	if err != nil {
-		log.Fatalf("RemoveNode RPC failed: %v", err)
+		slog.Error("RemoveNode RPC failed", "node", nodeAddr, "error", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("Successfully removed node: %s\n", nodeAddr)
@@ -93,7 +96,8 @@ func listNodes(client proto.VideoContentAdminServiceClient) {
 
 	response, err := client.ListNodes(ctx, &proto.ListNodesRequest{})
 	if err != nil {
-		log.Fatalf("ListNodes RPC failed: %v", err)
+		slog.Error("ListNodes RPC failed", "error", err)
+		os.Exit(1)
 	}
 
 	fmt.Println("Storage cluster nodes:")

@@ -15,7 +15,9 @@ desired_count    = 2
 worker_image         = "" # Optional: defaults to <ecr-repo>:worker
 worker_cpu           = 512
 worker_memory        = 1024
-worker_desired_count = 1
+worker_desired_count = 0  # Initial count; autoscaling takes over immediately
+worker_min_count     = 0  # 0 = scale to zero when queue is empty
+worker_max_count     = 5  # Cap concurrent FFmpeg tasks (each uses ~512 CPU units)
 
 # Auto Scaling
 enable_autoscaling = true
