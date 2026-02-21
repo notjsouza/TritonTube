@@ -107,7 +107,10 @@ resource "aws_iam_role_policy" "ecs_task_sqs" {
           "sqs:GetQueueAttributes",
           "sqs:ChangeMessageVisibility"
         ]
-        Resource = var.sqs_queue_arn
+        Resource = [
+          var.sqs_queue_arn,
+          var.sqs_dlq_arn,
+        ]
       }
     ]
   })

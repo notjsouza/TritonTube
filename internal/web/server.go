@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -173,7 +173,7 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("FFmpeg conversion failed: %v\nOutput: %s", err, string(output))
+		slog.Error("ffmpeg conversion failed", "video_id", videoId, "error", err, "output", string(output))
 		http.Error(w, "video conversion failed", http.StatusInternalServerError)
 		return
 	}
@@ -191,20 +191,20 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 		// Skip the original MP4 file - we only need DASH segments
 		if strings.HasSuffix(f.Name(), ".mp4") {
-			log.Printf("Skipping original MP4 file: %s (not needed after conversion)", f.Name())
+			slog.Debug("skipping original mp4", "video_id", videoId, "file", f.Name())
 			continue
 		}
 
 		data, err := os.ReadFile(filepath.Join(tempDir, f.Name()))
 		if err != nil {
-			log.Printf("Failed to read segment file %s: %v", f.Name(), err)
+			slog.Error("failed to read segment file", "video_id", videoId, "file", f.Name(), "error", err)
 			http.Error(w, "failed to read segment file", http.StatusInternalServerError)
 			return
 		}
 
 		err = s.contentService.Write(videoId, f.Name(), data)
 		if err != nil {
-			log.Printf("Failed to write segment file %s: %v", f.Name(), err)
+			slog.Error("failed to write segment file", "video_id", videoId, "file", f.Name(), "error", err)
 			http.Error(w, "failed to write segment file", http.StatusInternalServerError)
 			return
 		}
@@ -225,7 +225,7 @@ func (s *server) handleVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	videoId := r.URL.Path[len("/videos/"):]
-	log.Println("Video ID:", videoId)
+	slog.Debug("video page request", "video_id", videoId)
 
 	meta, err := s.metadataService.Read(videoId)
 	if err != nil {
@@ -267,7 +267,7 @@ func (s *server) handleVideoContent(w http.ResponseWriter, r *http.Request) {
 	}
 	videoId = parts[0]
 	filename := parts[1]
-	log.Println("Video ID:", videoId, "Filename:", filename)
+	slog.Debug("video content request", "video_id", videoId, "filename", filename)
 
 	data, err := s.contentService.Read(videoId, filename)
 	if err != nil {
@@ -299,11 +299,11 @@ func (s *server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("Thumbnail request for video ID:", videoId)
+	slog.Debug("thumbnail request", "video_id", videoId)
 
 	data, err := s.contentService.Read(videoId, "thumbnail.jpg")
 	if err != nil {
-		log.Printf("Failed to read thumbnail for %s: %v", videoId, err)
+		slog.Warn("failed to read thumbnail", "video_id", videoId, "error", err)
 		http.Error(w, "thumbnail not found", http.StatusNotFound)
 		return
 	}
@@ -371,7 +371,7 @@ func (s *server) handleAPIVideos(w http.ResponseWriter, r *http.Request) {
 
 	metas, err := s.metadataService.List()
 	if err != nil {
-		log.Printf("Failed to list videos: %v", err)
+		slog.Error("failed to list videos", "error", err)
 		s.sendJSONError(w, "failed to list videos", http.StatusInternalServerError)
 		return
 	}
@@ -415,7 +415,7 @@ func (s *server) handleAPIVideoDetail(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := s.metadataService.Read(videoId)
 	if err != nil {
-		log.Printf("Failed to read video metadata: %v", err)
+		slog.Error("failed to read video metadata", "video_id", videoId, "error", err)
 		s.sendJSONError(w, "failed to read video metadata", http.StatusInternalServerError)
 		return
 	}
@@ -472,7 +472,7 @@ func (s *server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 
 	tempDir, err := os.MkdirTemp("", "upload-*")
 	if err != nil {
-		log.Printf("Failed to create temp directory: %v", err)
+		slog.Error("failed to create temp directory", "error", err)
 		s.sendJSONError(w, "failed to create temporary directory", http.StatusInternalServerError)
 		return
 	}
@@ -481,7 +481,7 @@ func (s *server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 	videoPath := filepath.Join(tempDir, header.Filename)
 	outFile, err := os.Create(videoPath)
 	if err != nil {
-		log.Printf("Failed to create video file: %v", err)
+		slog.Error("failed to create video file", "video_id", videoId, "error", err)
 		s.sendJSONError(w, "failed to save uploaded file", http.StatusInternalServerError)
 		return
 	}
@@ -511,7 +511,7 @@ func (s *server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("FFmpeg conversion failed: %v\nOutput: %s", err, string(output))
+		slog.Error("ffmpeg conversion failed", "video_id", videoId, "error", err, "output", string(output))
 		s.sendJSONError(w, "video conversion failed", http.StatusInternalServerError)
 		return
 	}
@@ -530,15 +530,15 @@ func (s *server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 
 	thumbnailOutput, err := thumbnailCmd.CombinedOutput()
 	if err != nil {
-		log.Printf("Warning: Thumbnail generation failed: %v\nOutput: %s", err, string(thumbnailOutput))
+		slog.Warn("thumbnail generation failed", "video_id", videoId, "error", err, "output", string(thumbnailOutput))
 		// Don't fail the upload if thumbnail generation fails
 	} else {
-		log.Printf("Thumbnail generated successfully for video: %s", videoId)
+		slog.Info("thumbnail generated", "video_id", videoId)
 	}
 
 	files, err := os.ReadDir(tempDir)
 	if err != nil {
-		log.Printf("Failed to read temp directory: %v", err)
+		slog.Error("failed to read temp directory", "video_id", videoId, "error", err)
 		s.sendJSONError(w, "failed to read converted files", http.StatusInternalServerError)
 		return
 	}
@@ -550,20 +550,20 @@ func (s *server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 
 		// Skip the original MP4 file - we only need DASH segments
 		if strings.HasSuffix(f.Name(), ".mp4") {
-			log.Printf("Skipping original MP4 file: %s (not needed after conversion)", f.Name())
+			slog.Debug("skipping original mp4", "video_id", videoId, "file", f.Name())
 			continue
 		}
 
 		data, err := os.ReadFile(filepath.Join(tempDir, f.Name()))
 		if err != nil {
-			log.Printf("Failed to read segment file %s: %v", f.Name(), err)
+			slog.Error("failed to read segment file", "video_id", videoId, "file", f.Name(), "error", err)
 			s.sendJSONError(w, "failed to read segment file", http.StatusInternalServerError)
 			return
 		}
 
 		err = s.contentService.Write(videoId, f.Name(), data)
 		if err != nil {
-			log.Printf("Failed to write segment file %s: %v", f.Name(), err)
+			slog.Error("failed to write segment file", "video_id", videoId, "file", f.Name(), "error", err)
 			s.sendJSONError(w, "failed to write segment file", http.StatusInternalServerError)
 			return
 		}
@@ -571,7 +571,7 @@ func (s *server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 
 	err = s.metadataService.Create(videoId, time.Now())
 	if err != nil {
-		log.Printf("Failed to save metadata: %v", err)
+		slog.Error("failed to save metadata", "video_id", videoId, "error", err)
 		s.sendJSONError(w, "failed to save video metadata", http.StatusInternalServerError)
 		return
 	}
@@ -604,7 +604,7 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 	// Check if video exists
 	meta, err := s.metadataService.Read(videoId)
 	if err != nil {
-		log.Printf("Failed to read video metadata: %v", err)
+		slog.Error("failed to read video metadata", "video_id", videoId, "error", err)
 		s.sendJSONError(w, "failed to read video metadata", http.StatusInternalServerError)
 		return
 	}
@@ -617,7 +617,7 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 	// Delete content files from storage nodes
 	err = s.contentService.DeleteAll(videoId)
 	if err != nil {
-		log.Printf("Warning: Failed to delete video content from storage nodes: %v", err)
+		slog.Warn("failed to delete video content from storage", "video_id", videoId, "error", err)
 		// Continue anyway to delete metadata
 	}
 
@@ -630,7 +630,7 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 
 		// Delete the entire folder in uploads bucket
 		uploadPrefix := fmt.Sprintf("uploads/%s/", videoId)
-		log.Printf("Deleting upload files from s3://%s/%s", uploadBucket, uploadPrefix)
+		slog.Info("deleting upload files", "video_id", videoId, "bucket", uploadBucket, "prefix", uploadPrefix)
 
 		listInput := &s3.ListObjectsV2Input{
 			Bucket: aws.String(uploadBucket),
@@ -639,7 +639,7 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 
 		listOutput, err := s3svc.client.ListObjectsV2(context.TODO(), listInput)
 		if err != nil {
-			log.Printf("Warning: Failed to list upload files for deletion: %v", err)
+			slog.Warn("failed to list upload files for deletion", "video_id", videoId, "prefix", uploadPrefix, "error", err)
 		} else if len(listOutput.Contents) > 0 {
 			for _, obj := range listOutput.Contents {
 				_, err := s3svc.client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
@@ -647,9 +647,9 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 					Key:    obj.Key,
 				})
 				if err != nil {
-					log.Printf("Warning: Failed to delete upload file %s: %v", *obj.Key, err)
+					slog.Warn("failed to delete upload file", "video_id", videoId, "key", *obj.Key, "error", err)
 				} else {
-					log.Printf("Deleted upload file: %s", *obj.Key)
+					slog.Info("deleted upload file", "video_id", videoId, "key", *obj.Key)
 				}
 			}
 		}
@@ -658,12 +658,12 @@ func (s *server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 	// Delete from metadata database
 	err = s.metadataService.Delete(videoId)
 	if err != nil {
-		log.Printf("Failed to delete video metadata: %v", err)
+		slog.Error("failed to delete video metadata", "video_id", videoId, "error", err)
 		s.sendJSONError(w, "failed to delete video metadata", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Successfully deleted video: %s", videoId)
+	slog.Info("video deleted", "video_id", videoId)
 
 	response := map[string]interface{}{
 		"success": true,
@@ -717,10 +717,10 @@ func (s *server) handleAPIPresignUpload(w http.ResponseWriter, r *http.Request) 
 	// Check if video already exists to prevent race conditions
 	existingMeta, err := s.metadataService.Read(body.VideoId)
 	if err != nil {
-		log.Printf("Warning: Failed to check existing video metadata: %v", err)
+		slog.Warn("failed to check existing video metadata", "video_id", body.VideoId, "error", err)
 		// Continue anyway - better to allow upload than block on metadata check failure
 	} else if existingMeta != nil {
-		log.Printf("Upload rejected: video ID '%s' already exists with status '%s'", body.VideoId, existingMeta.Status)
+		slog.Info("upload rejected: video already exists", "video_id", body.VideoId, "status", existingMeta.Status)
 		s.sendJSONError(w, fmt.Sprintf("video ID '%s' already exists - please delete the existing video first or use a different ID", body.VideoId), http.StatusConflict)
 		return
 	}
@@ -731,7 +731,7 @@ func (s *server) handleAPIPresignUpload(w http.ResponseWriter, r *http.Request) 
 	// Use AWS SDK v2 to create a presigned PUT URL
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
-		log.Printf("Failed to load AWS config for presign: %v", err)
+		slog.Error("failed to load AWS config for presign", "video_id", body.VideoId, "error", err)
 		s.sendJSONError(w, "failed to create presigned url", http.StatusInternalServerError)
 		return
 	}
@@ -757,7 +757,7 @@ func (s *server) handleAPIPresignUpload(w http.ResponseWriter, r *http.Request) 
 
 	presignResp, err := presigner.PresignPutObject(context.TODO(), putInput)
 	if err != nil {
-		log.Printf("Failed to presign PUT object: %v", err)
+		slog.Error("failed to presign PUT object", "video_id", body.VideoId, "key", key, "error", err)
 		s.sendJSONError(w, "failed to create presigned url", http.StatusInternalServerError)
 		return
 	}
@@ -794,17 +794,16 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 
 	// Create metadata entry immediately with "processing" status
 	if err := s.metadataService.CreateWithStatus(body.VideoId, time.Now(), "processing"); err != nil {
-		log.Printf("ERROR: Failed to create metadata with processing status for '%s': %v", body.VideoId, err)
-		log.Printf("This may indicate a race condition - video might already exist or be processing")
+		slog.Error("failed to create metadata with processing status", "video_id", body.VideoId, "error", err)
 		// Check if it already exists
 		existingMeta, readErr := s.metadataService.Read(body.VideoId)
 		if readErr == nil && existingMeta != nil {
-			log.Printf("Confirmed: Video '%s' already exists with status '%s', uploadedAt: %v", body.VideoId, existingMeta.Status, existingMeta.UploadedAt)
+			slog.Warn("video already exists", "video_id", body.VideoId, "status", existingMeta.Status, "uploaded_at", existingMeta.UploadedAt)
 			s.sendJSONError(w, fmt.Sprintf("video '%s' already exists or is being processed", body.VideoId), http.StatusConflict)
 			return
 		}
 		// If we can't read it either, there's a bigger problem - fail the request
-		log.Printf("CRITICAL: Cannot create or read metadata for '%s' - rejecting processing request", body.VideoId)
+		slog.Error("cannot create or read metadata", "video_id", body.VideoId)
 		s.sendJSONError(w, "failed to initialize video processing - please try again or use a different video ID", http.StatusInternalServerError)
 		return
 	}
@@ -827,7 +826,7 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 				MessageBody: aws.String(string(msgBody)),
 			})
 			if sendErr == nil {
-				// Enqueued successfully
+				slog.Info("job enqueued", "video_id", body.VideoId, "filename", body.Filename)
 				resp := map[string]interface{}{
 					"status":  "enqueued",
 					"videoId": body.VideoId,
@@ -835,19 +834,21 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 				s.sendJSON(w, resp, http.StatusAccepted)
 				return
 			}
-			log.Printf("Failed to send SQS message: %v", sendErr)
+			slog.Error("failed to send SQS message", "video_id", body.VideoId, "error", sendErr)
 		} else {
-			log.Printf("Failed to load AWS config for SQS send: %v", cfgErr)
+			slog.Error("failed to load AWS config for SQS send", "error", cfgErr)
 		}
 		// If SQS send failed, fall back to in-process worker
 	}
 
 	// Launch background goroutine to download the uploaded file from uploads/ and run processing
 	go func(videoId, filename string) {
+		bgLog := slog.With("video_id", videoId, "filename", filename, "worker", "background")
+
 		// Create temp dir for processing
 		tmp, err := os.MkdirTemp("", "proc-*")
 		if err != nil {
-			log.Printf("Background worker: failed to create temp dir: %v", err)
+			bgLog.Error("failed to create temp dir", "error", err)
 			return
 		}
 		defer os.RemoveAll(tmp)
@@ -857,7 +858,7 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 
 		cfg, err := config.LoadDefaultConfig(context.TODO())
 		if err != nil {
-			log.Printf("Background worker: failed to load AWS config: %v", err)
+			bgLog.Error("failed to load AWS config", "error", err)
 			return
 		}
 		s3client := s3.NewFromConfig(cfg)
@@ -868,7 +869,7 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 			Key:    aws.String(srcKey),
 		})
 		if err != nil {
-			log.Printf("Background worker: failed to download uploaded file %s: %v", srcKey, err)
+			bgLog.Error("failed to download uploaded file", "key", srcKey, "error", err)
 			return
 		}
 		defer getResp.Body.Close()
@@ -876,13 +877,13 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 		localPath := filepath.Join(tmp, filename)
 		out, err := os.Create(localPath)
 		if err != nil {
-			log.Printf("Background worker: failed to create local file: %v", err)
+			bgLog.Error("failed to create local file", "path", localPath, "error", err)
 			return
 		}
 		_, err = io.Copy(out, getResp.Body)
 		out.Close()
 		if err != nil {
-			log.Printf("Background worker: failed to write local file: %v", err)
+			bgLog.Error("failed to write local file", "error", err)
 			return
 		}
 
@@ -909,14 +910,14 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 		cmd.Dir = tmp
 		outb, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Printf("Background worker: ffmpeg failed: %v, output: %s", err, string(outb))
+			bgLog.Error("ffmpeg failed", "error", err, "output", string(outb))
 			return
 		}
 
 		// Upload generated files to final video location using s.contentService.Write
 		files, err := os.ReadDir(tmp)
 		if err != nil {
-			log.Printf("Background worker: readdir failed: %v", err)
+			bgLog.Error("readdir failed", "error", err)
 			return
 		}
 		for _, f := range files {
@@ -928,22 +929,22 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 			}
 			data, err := os.ReadFile(filepath.Join(tmp, f.Name()))
 			if err != nil {
-				log.Printf("Background worker: read file failed: %v", err)
+				bgLog.Error("read file failed", "file", f.Name(), "error", err)
 				return
 			}
 			if err := s.contentService.Write(videoId, f.Name(), data); err != nil {
-				log.Printf("Background worker: write to content service failed: %v", err)
+				bgLog.Error("write to content service failed", "file", f.Name(), "error", err)
 				return
 			}
 		}
 
 		// Update metadata status to ready
 		if err := s.metadataService.UpdateStatus(videoId, "ready"); err != nil {
-			log.Printf("Background worker: failed to update metadata status: %v", err)
+			bgLog.Error("failed to update metadata status", "error", err)
 			// Still log completion even if status update fails
 		}
 
-		log.Printf("Background worker: processing completed for %s", videoId)
+		bgLog.Info("processing completed")
 	}(body.VideoId, body.Filename)
 
 	// Respond immediately

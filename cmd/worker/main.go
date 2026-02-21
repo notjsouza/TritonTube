@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,14 +21,18 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	queueURL := os.Getenv("SQS_QUEUE_URL")
 	if queueURL == "" {
-		log.Fatal("SQS_QUEUE_URL not set")
+		slog.Error("SQS_QUEUE_URL not set")
+		os.Exit(1)
 	}
 
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
-		log.Fatalf("failed to load aws config: %v", err)
+		slog.Error("failed to load aws config", "error", err)
+		os.Exit(1)
 	}
 
 	sqsClient := sqs.NewFromConfig(cfg)
@@ -48,7 +52,7 @@ func main() {
 			WaitTimeSeconds:     20,
 		})
 		if err != nil {
-			log.Printf("receive message error: %v", err)
+			slog.Error("receive message error", "error", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -59,7 +63,7 @@ func main() {
 				Filename string `json:"filename"`
 			}
 			if err := json.Unmarshal([]byte(*m.Body), &payload); err != nil {
-				log.Printf("invalid message body: %v", err)
+				slog.Error("invalid message body", "error", err)
 				// delete message to avoid poison
 				sqsClient.DeleteMessage(context.TODO(), &sqs.DeleteMessageInput{
 					QueueUrl:      &queueURL,
@@ -68,14 +72,16 @@ func main() {
 				continue
 			}
 
-			log.Printf("Processing job: %s / %s", payload.VideoId, payload.Filename)
+			// create a child logger with job context so every log line carries video_id and filename
+			jobLog := slog.With("video_id", payload.VideoId, "filename", payload.Filename)
+			jobLog.Info("processing job")
 
 			// process each message inside a closure so that defers (cleanup) run per-iteration
 			func() {
 				// create tmp dir
 				tmp, err := os.MkdirTemp("", "proc-*")
 				if err != nil {
-					log.Printf("mkdir temp failed: %v", err)
+					jobLog.Error("mkdir temp failed", "error", err)
 					return
 				}
 				defer os.RemoveAll(tmp)
@@ -91,14 +97,14 @@ func main() {
 					Key:    &srcKey,
 				})
 				if err != nil {
-					log.Printf("s3 get object failed: %v", err)
+					jobLog.Error("s3 get object failed", "key", srcKey, "error", err)
 					// do not delete the message so it can be retried
 					return
 				}
 				localPath := filepath.Join(tmp, payload.Filename)
 				outf, err := os.Create(localPath)
 				if err != nil {
-					log.Printf("create local file failed: %v", err)
+					jobLog.Error("create local file failed", "path", localPath, "error", err)
 					getResp.Body.Close()
 					return
 				}
@@ -106,7 +112,7 @@ func main() {
 				outf.Close()
 				getResp.Body.Close()
 				if err != nil {
-					log.Printf("copy local failed: %v", err)
+					jobLog.Error("copy local failed", "error", err)
 					return
 				}
 
@@ -138,7 +144,7 @@ func main() {
 				cmd.Dir = tmp
 				outb, err := cmd.CombinedOutput()
 				if err != nil {
-					log.Printf("ffmpeg failed: %v, out: %s", err, string(outb))
+					jobLog.Error("ffmpeg failed", "error", err, "output", string(outb))
 					return
 				}
 
@@ -155,22 +161,14 @@ func main() {
 				thumbnailCmd.Dir = tmp
 				thumbnailOutput, err := thumbnailCmd.CombinedOutput()
 				if err != nil {
-					log.Printf("========================================")
-					log.Printf("ERROR: Thumbnail generation FAILED for video: %s", payload.VideoId)
-					log.Printf("Error: %v", err)
-					log.Printf("FFmpeg output: %s", string(thumbnailOutput))
-					log.Printf("========================================")
+					jobLog.Error("thumbnail generation failed", "error", err, "ffmpeg_output", string(thumbnailOutput))
 					// Don't fail the job if thumbnail generation fails, but make it very visible
 				} else {
 					// Verify thumbnail file was actually created
 					if _, statErr := os.Stat(thumbnailPath); statErr == nil {
-						log.Printf("✓ Thumbnail generated successfully for video: %s", payload.VideoId)
+						jobLog.Info("thumbnail generated successfully")
 					} else {
-						log.Printf("========================================")
-						log.Printf("ERROR: Thumbnail file not found after generation for video: %s", payload.VideoId)
-						log.Printf("Expected path: %s", thumbnailPath)
-						log.Printf("Stat error: %v", statErr)
-						log.Printf("========================================")
+						jobLog.Error("thumbnail file not found after generation", "expected_path", thumbnailPath, "error", statErr)
 					}
 				}
 
@@ -182,7 +180,7 @@ func main() {
 
 				files, err := os.ReadDir(tmp)
 				if err != nil {
-					log.Printf("failed to list produced files: %v", err)
+					jobLog.Error("failed to list produced files", "error", err)
 					return
 				}
 
@@ -193,7 +191,7 @@ func main() {
 					name := ff.Name()
 					data, err := os.ReadFile(filepath.Join(tmp, name))
 					if err != nil {
-						log.Printf("failed to read produced file %s: %v", name, err)
+						jobLog.Error("failed to read produced file", "file", name, "error", err)
 						continue
 					}
 
@@ -214,13 +212,13 @@ func main() {
 						ContentType: aws.String(contentType),
 					})
 					if err != nil {
-						log.Printf("failed to upload produced file %s: %v", name, err)
+						jobLog.Error("failed to upload produced file", "file", name, "error", err)
 						continue
 					}
-					log.Printf("Uploaded produced file to s3://%s/%s", uploadBucket, key)
+					jobLog.Info("uploaded produced file", "bucket", uploadBucket, "key", key)
 				}
 
-				log.Printf("Job completed for %s", payload.VideoId)
+				jobLog.Info("job completed")
 
 				// Update DynamoDB metadata status to ready
 				_, err = dynamoClient.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
@@ -237,10 +235,10 @@ func main() {
 					},
 				})
 				if err != nil {
-					log.Printf("failed to update metadata status: %v", err)
+					jobLog.Error("failed to update metadata status", "error", err)
 					// Still delete the message since processing succeeded
 				} else {
-					log.Printf("Created DynamoDB metadata for %s", payload.VideoId)
+					jobLog.Info("metadata status updated", "status", "ready")
 				}
 
 				// delete message after success
