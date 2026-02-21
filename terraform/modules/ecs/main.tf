@@ -420,6 +420,8 @@ resource "aws_appautoscaling_policy" "ecs_memory" {
 
 # Register the worker service as an autoscaling target
 resource "aws_appautoscaling_target" "worker" {
+  count = var.enable_autoscaling ? 1 : 0
+
   min_capacity       = var.worker_min_count
   max_capacity       = var.worker_max_count
   resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.worker.name}"
@@ -429,6 +431,8 @@ resource "aws_appautoscaling_target" "worker" {
 
 # Alarm: queue has waiting messages → scale out
 resource "aws_cloudwatch_metric_alarm" "worker_scale_out" {
+  count = var.enable_autoscaling ? 1 : 0
+
   alarm_name          = "${var.project_name}-worker-scale-out"
   alarm_description   = "Workers needed: messages are waiting in the upload queue"
   comparison_operator = "GreaterThanOrEqualToThreshold"
@@ -436,7 +440,7 @@ resource "aws_cloudwatch_metric_alarm" "worker_scale_out" {
   metric_name         = "ApproximateNumberOfMessagesVisible"
   namespace           = "AWS/SQS"
   period              = 60
-  statistic           = "Sum"
+  statistic           = "Maximum"
   threshold           = 1
   treat_missing_data  = "notBreaching"
 
@@ -444,31 +448,60 @@ resource "aws_cloudwatch_metric_alarm" "worker_scale_out" {
     QueueName = aws_sqs_queue.upload_jobs.name
   }
 
-  alarm_actions = [aws_appautoscaling_policy.worker_scale_out.arn]
+  alarm_actions = var.enable_autoscaling ? [aws_appautoscaling_policy.worker_scale_out[0].arn] : []
 
   tags = {
     Name = "${var.project_name}-worker-scale-out"
   }
 }
 
-# Alarm: queue empty for 5 consecutive minutes → scale in
+# Alarm: queue empty (visible + in-flight = 0) for 5 consecutive minutes → scale in
+# Using metric math on both Visible and NotVisible avoids scaling in while
+# workers are processing messages (NotVisible > 0) but the visible queue is empty.
 resource "aws_cloudwatch_metric_alarm" "worker_scale_in" {
+  count = var.enable_autoscaling ? 1 : 0
+
   alarm_name          = "${var.project_name}-worker-scale-in"
-  alarm_description   = "No pending uploads: scale in workers after queue drains"
-  comparison_operator = "LessThanThreshold"
+  alarm_description   = "No pending uploads: scale in workers after queue fully drains"
+  comparison_operator = "LessThanOrEqualToThreshold"
   evaluation_periods  = 5
-  metric_name         = "ApproximateNumberOfMessagesVisible"
-  namespace           = "AWS/SQS"
-  period              = 60
-  statistic           = "Sum"
-  threshold           = 1
+  threshold           = 0
   treat_missing_data  = "notBreaching"
 
-  dimensions = {
-    QueueName = aws_sqs_queue.upload_jobs.name
+  metric_query {
+    id = "m_visible"
+    metric {
+      namespace   = "AWS/SQS"
+      metric_name = "ApproximateNumberOfMessagesVisible"
+      period      = 60
+      stat        = "Average"
+      dimensions = {
+        QueueName = aws_sqs_queue.upload_jobs.name
+      }
+    }
   }
 
-  alarm_actions = [aws_appautoscaling_policy.worker_scale_in.arn]
+  metric_query {
+    id = "m_not_visible"
+    metric {
+      namespace   = "AWS/SQS"
+      metric_name = "ApproximateNumberOfMessagesNotVisible"
+      period      = 60
+      stat        = "Average"
+      dimensions = {
+        QueueName = aws_sqs_queue.upload_jobs.name
+      }
+    }
+  }
+
+  metric_query {
+    id          = "m_total"
+    expression  = "m_visible + m_not_visible"
+    label       = "TotalMessages"
+    return_data = true
+  }
+
+  alarm_actions = var.enable_autoscaling ? [aws_appautoscaling_policy.worker_scale_in[0].arn] : []
 
   tags = {
     Name = "${var.project_name}-worker-scale-in"
@@ -481,16 +514,18 @@ resource "aws_cloudwatch_metric_alarm" "worker_scale_in" {
 #   [4, 9)  → queue has 5-9  msgs → +2 workers
 #   [9, ∞)  → queue has 10+  msgs → +4 workers
 resource "aws_appautoscaling_policy" "worker_scale_out" {
+  count = var.enable_autoscaling ? 1 : 0
+
   name               = "${var.project_name}-worker-scale-out"
   policy_type        = "StepScaling"
-  resource_id        = aws_appautoscaling_target.worker.resource_id
-  scalable_dimension = aws_appautoscaling_target.worker.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.worker.service_namespace
+  resource_id        = aws_appautoscaling_target.worker[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.worker[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.worker[0].service_namespace
 
   step_scaling_policy_configuration {
     adjustment_type         = "ChangeInCapacity"
     cooldown                = 60
-    metric_aggregation_type = "Sum"
+    metric_aggregation_type = "Maximum"
 
     step_adjustment {
       metric_interval_lower_bound = 0
@@ -515,16 +550,18 @@ resource "aws_appautoscaling_policy" "worker_scale_out" {
 # Cooldown matches the SQS visibility timeout (1800s) so we don't terminate
 # a task that is mid-job but temporarily showing an empty visible queue.
 resource "aws_appautoscaling_policy" "worker_scale_in" {
+  count = var.enable_autoscaling ? 1 : 0
+
   name               = "${var.project_name}-worker-scale-in"
   policy_type        = "StepScaling"
-  resource_id        = aws_appautoscaling_target.worker.resource_id
-  scalable_dimension = aws_appautoscaling_target.worker.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.worker.service_namespace
+  resource_id        = aws_appautoscaling_target.worker[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.worker[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.worker[0].service_namespace
 
   step_scaling_policy_configuration {
     adjustment_type         = "ChangeInCapacity"
     cooldown                = 1800 # matches SQS visibility timeout
-    metric_aggregation_type = "Sum"
+    metric_aggregation_type = "Maximum"
 
     step_adjustment {
       metric_interval_upper_bound = 0

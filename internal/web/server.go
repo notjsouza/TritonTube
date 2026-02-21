@@ -803,7 +803,7 @@ func (s *server) handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// If we can't read it either, there's a bigger problem - fail the request
-		slog.Error("cannot create or read metadata", "video_id", body.VideoId)
+		slog.Error("cannot create or read metadata", "video_id", body.VideoId, "create_error", err, "read_error", readErr)
 		s.sendJSONError(w, "failed to initialize video processing - please try again or use a different video ID", http.StatusInternalServerError)
 		return
 	}

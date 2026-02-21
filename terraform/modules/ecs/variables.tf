@@ -102,6 +102,12 @@ variable "worker_max_count" {
   default     = 5
 }
 
+variable "enable_autoscaling" {
+  description = "Whether to create worker autoscaling resources (target, alarms, policies)"
+  type        = bool
+  default     = true
+}
+
 variable "cdn_domain" {
   description = "CloudFront CDN domain"
   type        = string

@@ -107,5 +107,6 @@ module "ecs" {
   worker_desired_count       = var.worker_desired_count
   worker_min_count           = var.worker_min_count
   worker_max_count           = var.worker_max_count
+  enable_autoscaling         = var.enable_autoscaling
   cdn_domain                 = module.cloudfront.video_cdn_domain
 }

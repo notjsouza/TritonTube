@@ -99,6 +99,7 @@ resource "aws_iam_role_policy" "ecs_task_sqs" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Full access to the main queue: web service enqueues, worker dequeues
         Effect = "Allow"
         Action = [
           "sqs:SendMessage",
@@ -107,10 +108,18 @@ resource "aws_iam_role_policy" "ecs_task_sqs" {
           "sqs:GetQueueAttributes",
           "sqs:ChangeMessageVisibility"
         ]
-        Resource = [
-          var.sqs_queue_arn,
-          var.sqs_dlq_arn,
+        Resource = var.sqs_queue_arn
+      },
+      {
+        # DLQ: only allow consuming/inspecting — messages arrive via redrive, not direct send
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:ChangeMessageVisibility"
         ]
+        Resource = var.sqs_dlq_arn
       }
     ]
   })
