@@ -18,6 +18,11 @@ variable "sqs_queue_arn" {
   type        = string
 }
 
+variable "sqs_dlq_arn" {
+  description = "ARN of the dead-letter queue for failed upload jobs"
+  type        = string
+}
+
 variable "s3_bucket_name" {
   description = "Name of the S3 bucket for video content"
   type        = string

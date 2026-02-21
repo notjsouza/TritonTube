@@ -152,13 +152,29 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Simple SQS queue for upload processing jobs
+# Dead-letter queue — receives messages that fail processing maxReceiveCount times
+resource "aws_sqs_queue" "upload_jobs_dlq" {
+  name                      = "${var.project_name}-upload-jobs-dlq"
+  message_retention_seconds = 1209600 # 14 days — long enough to investigate and replay
+
+  tags = {
+    Name = "${var.project_name}-upload-jobs-dlq"
+  }
+}
+
+# Main SQS queue for upload processing jobs
 resource "aws_sqs_queue" "upload_jobs" {
-  name                      = "${var.project_name}-upload-jobs"
-  delay_seconds             = 0
-  visibility_timeout_seconds = 1800 # 30 minutes to allow long processing
-  message_retention_seconds = 1209600 # 14 days
-  receive_wait_time_seconds = 20
+  name                       = "${var.project_name}-upload-jobs"
+  delay_seconds              = 0
+  visibility_timeout_seconds = 1800 # 30 minutes to allow long FFmpeg processing
+  message_retention_seconds  = 1209600 # 14 days
+  receive_wait_time_seconds  = 20
+
+  # After 3 failed processing attempts, route to DLQ
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.upload_jobs_dlq.arn
+    maxReceiveCount     = 3
+  })
 
   tags = {
     Name = "${var.project_name}-upload-jobs"
@@ -397,6 +413,160 @@ resource "aws_appautoscaling_policy" "ecs_memory" {
     target_value       = 80.0
     scale_in_cooldown  = 60
     scale_out_cooldown = 60
+  }
+}
+
+# ── Worker Auto Scaling ────────────────────────────────────────────────────────
+
+# Register the worker service as an autoscaling target
+resource "aws_appautoscaling_target" "worker" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  min_capacity       = var.worker_min_count
+  max_capacity       = var.worker_max_count
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.worker.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+# Alarm: queue has waiting messages → scale out
+resource "aws_cloudwatch_metric_alarm" "worker_scale_out" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  alarm_name          = "${var.project_name}-worker-scale-out"
+  alarm_description   = "Workers needed: messages are waiting in the upload queue"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    QueueName = aws_sqs_queue.upload_jobs.name
+  }
+
+  alarm_actions = var.enable_autoscaling ? [aws_appautoscaling_policy.worker_scale_out[0].arn] : []
+
+  tags = {
+    Name = "${var.project_name}-worker-scale-out"
+  }
+}
+
+# Alarm: queue empty (visible + in-flight = 0) for 5 consecutive minutes → scale in
+# Using metric math on both Visible and NotVisible avoids scaling in while
+# workers are processing messages (NotVisible > 0) but the visible queue is empty.
+resource "aws_cloudwatch_metric_alarm" "worker_scale_in" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  alarm_name          = "${var.project_name}-worker-scale-in"
+  alarm_description   = "No pending uploads: scale in workers after queue fully drains"
+  comparison_operator = "LessThanOrEqualToThreshold"
+  evaluation_periods  = 5
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  metric_query {
+    id = "m_visible"
+    metric {
+      namespace   = "AWS/SQS"
+      metric_name = "ApproximateNumberOfMessagesVisible"
+      period      = 60
+      stat        = "Average"
+      dimensions = {
+        QueueName = aws_sqs_queue.upload_jobs.name
+      }
+    }
+  }
+
+  metric_query {
+    id = "m_not_visible"
+    metric {
+      namespace   = "AWS/SQS"
+      metric_name = "ApproximateNumberOfMessagesNotVisible"
+      period      = 60
+      stat        = "Average"
+      dimensions = {
+        QueueName = aws_sqs_queue.upload_jobs.name
+      }
+    }
+  }
+
+  metric_query {
+    id          = "m_total"
+    expression  = "m_visible + m_not_visible"
+    label       = "TotalMessages"
+    return_data = true
+  }
+
+  alarm_actions = var.enable_autoscaling ? [aws_appautoscaling_policy.worker_scale_in[0].arn] : []
+
+  tags = {
+    Name = "${var.project_name}-worker-scale-in"
+  }
+}
+
+# Scale-out policy: add workers proportional to queue depth
+# Bounds are relative to alarm threshold (1), so:
+#   [0, 4)  → queue has 1-4  msgs → +1 worker
+#   [4, 9)  → queue has 5-9  msgs → +2 workers
+#   [9, ∞)  → queue has 10+  msgs → +4 workers
+resource "aws_appautoscaling_policy" "worker_scale_out" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  name               = "${var.project_name}-worker-scale-out"
+  policy_type        = "StepScaling"
+  resource_id        = aws_appautoscaling_target.worker[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.worker[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.worker[0].service_namespace
+
+  step_scaling_policy_configuration {
+    adjustment_type         = "ChangeInCapacity"
+    cooldown                = 60
+    metric_aggregation_type = "Maximum"
+
+    step_adjustment {
+      metric_interval_lower_bound = 0
+      metric_interval_upper_bound = 4
+      scaling_adjustment          = 1
+    }
+
+    step_adjustment {
+      metric_interval_lower_bound = 4
+      metric_interval_upper_bound = 9
+      scaling_adjustment          = 2
+    }
+
+    step_adjustment {
+      metric_interval_lower_bound = 9
+      scaling_adjustment          = 4
+    }
+  }
+}
+
+# Scale-in policy: remove 1 worker at a time
+# Cooldown matches the SQS visibility timeout (1800s) so we don't terminate
+# a task that is mid-job but temporarily showing an empty visible queue.
+resource "aws_appautoscaling_policy" "worker_scale_in" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  name               = "${var.project_name}-worker-scale-in"
+  policy_type        = "StepScaling"
+  resource_id        = aws_appautoscaling_target.worker[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.worker[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.worker[0].service_namespace
+
+  step_scaling_policy_configuration {
+    adjustment_type         = "ChangeInCapacity"
+    cooldown                = 1800 # matches SQS visibility timeout
+    metric_aggregation_type = "Maximum"
+
+    step_adjustment {
+      metric_interval_upper_bound = 0
+      scaling_adjustment          = -1
+    }
   }
 }
 

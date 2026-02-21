@@ -3,12 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 
 	"tritontube/internal/storage"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	host := flag.String("host", "localhost", "Host address for the server")
 	port := flag.Int("port", 8090, "Port number for the server")
 	flag.Parse()
@@ -31,6 +34,7 @@ func main() {
 	fmt.Printf("Base Directory: %s\n", baseDir)
 
 	if err := storage.StartServer(*host, *port, baseDir); err != nil {
-		log.Fatalf("Failed to start storage server: %v", err)
+		slog.Error("failed to start storage server", "error", err)
+		os.Exit(1)
 	}
 }

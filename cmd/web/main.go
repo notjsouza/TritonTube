@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -30,6 +31,8 @@ func printUsage() {
 }
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	// Define flags
 	port := flag.Int("port", 8080, "Port number for the web server")
 	host := flag.String("host", "localhost", "Host address for the web server")
